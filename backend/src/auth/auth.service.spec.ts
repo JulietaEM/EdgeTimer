@@ -4,6 +4,9 @@ import { BadRequestException } from '@nestjs/common';
 process.env.SUPABASE_URL = 'http://localhost:54321';
 process.env.SUPABASE_KEY = 'anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
+// Fija la URL de la prueba para que no dependa del .env de quien la corra.
+// (Lleva "/" al final a propósito: el servicio debe quitarla.)
+process.env.FRONTEND_URL = 'https://app.ejemplo.com/';
 
 import * as supabase from '../supabase';
 import { AuthService } from './auth.service';
@@ -43,7 +46,7 @@ describe('AuthService · recuperar contraseña', () => {
 
       expect(result.message).toBe(GENERIC);
       expect(resetPasswordForEmail).toHaveBeenCalledWith('ana@correo.com', {
-        redirectTo: 'https://edge-timer-blue.vercel.app',
+        redirectTo: 'https://app.ejemplo.com',
       });
     });
 

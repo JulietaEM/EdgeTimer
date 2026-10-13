@@ -13,7 +13,12 @@ import {
   View,
 } from 'react-native';
 import { AppShell } from './src/components/AppShell';
-import api, { getAccessToken, setSession, setSessionExpiredHandler } from './src/api';
+import api, {
+  getAccessToken,
+  restoreSession,
+  setSession,
+  setSessionExpiredHandler,
+} from './src/api';
 import { AdminHomeScreen } from './src/screens/AdminHome';
 import { AgendaScreen } from './src/screens/Agenda';
 import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
@@ -32,6 +37,9 @@ const logo = require('./assets/icon.png');
 export default function App() {
   // Si la web se abre desde el enlace del correo, empieza en "nueva contraseña".
   const [recoveryToken, setRecoveryToken] = useState<string | null>(readRecoveryToken);
+  // Mientras se intenta recuperar la sesión guardada se muestra un cargando
+  // (así no parpadea la pantalla de login). Se omite si llega un enlace de recuperación.
+  const [restoring, setRestoring] = useState(() => !readRecoveryToken());
   const [screen, setScreen] = useState<Screen>(() =>
     readRecoveryToken() ? 'resetPassword' : 'login',
   );
@@ -71,6 +79,16 @@ export default function App() {
     return () => setSessionExpiredHandler(null);
   }, []);
 
+  useEffect(() => {
+    if (!restoring) return;
+
+    restoreSession()
+      .then((restored) => {
+        if (restored) handleLoginSuccess(restored);
+      })
+      .finally(() => setRestoring(false));
+  }, []);
+
   const goTo = (next: Screen) => {
     setFeedback('');
     if (next !== 'resetPassword') {
@@ -100,7 +118,7 @@ export default function App() {
     endSession();
   };
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded || restoring) {
     return (
       <SafeAreaView style={styles.loading}>
         <ActivityIndicator color={colors.gold} />
