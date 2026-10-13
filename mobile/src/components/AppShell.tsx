@@ -2,13 +2,13 @@ import { useState, type ReactNode } from 'react';
 import {
   Image,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fonts } from '../theme';
 import type { AppScreen, Role } from '../types';
 
@@ -136,7 +136,12 @@ function MenuButton({
         pressed && styles.pressed,
       ]}
     >
-      <Image source={icon} style={[styles.menuIcon, active && styles.menuIconActive]} />
+      <Image
+        source={icon}
+        style={styles.menuIcon}
+        resizeMode="contain"
+        tintColor={active ? colors.lightGold : colors.darkGold}
+      />
       <Text style={[styles.menuText, active && styles.menuTextActive]}>{label}</Text>
     </Pressable>
   );
@@ -216,11 +221,6 @@ const styles = StyleSheet.create({
   menuIcon: {
     width: 21,
     height: 21,
-    resizeMode: 'contain',
-    tintColor: colors.darkGold,
-  },
-  menuIconActive: {
-    tintColor: colors.lightGold,
   },
   menuText: {
     color: colors.gray,

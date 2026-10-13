@@ -2,12 +2,14 @@ import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import type { Session, SessionProfile } from './types';
 import { loadRefreshToken, saveRefreshToken } from './utils/sessionStore';
 
-const baseURL =
+export const API_URL =
   process.env.EXPO_PUBLIC_API_URL || 'https://edgetimer-backend.onrender.com';
+const baseURL = API_URL;
 
+// 30 s: el servidor gratuito de Render tarda en "despertar" tras un rato sin uso.
 const api = axios.create({
   baseURL,
-  timeout: 10000,
+  timeout: 30000,
 });
 
 let session: Session | null = null;

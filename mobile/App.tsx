@@ -6,12 +6,12 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AppShell } from './src/components/AppShell';
 import api, {
   getAccessToken,
@@ -35,6 +35,14 @@ import { clearRecoveryToken, readRecoveryToken } from './src/utils/recoveryLink'
 const logo = require('./assets/icon.png');
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
   // Si la web se abre desde el enlace del correo, empieza en "nueva contraseña".
   const [recoveryToken, setRecoveryToken] = useState<string | null>(readRecoveryToken);
   // Mientras se intenta recuperar la sesión guardada se muestra un cargando
