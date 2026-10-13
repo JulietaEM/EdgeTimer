@@ -103,7 +103,7 @@ export function HomeScreen({
         style={styles.primaryAction}
         onPress={() => (isBarber ? setSlotOpen(true) : setRequestOpen(true))}
       >
-        <Image source={plusIcon} style={styles.actionIcon} />
+        <Image source={plusIcon} style={styles.actionIcon} tintColor={colors.white} />
         <Text style={styles.primaryActionText}>
           {isBarber ? 'Abrir nuevo horario' : 'Solicitar nueva cita'}
         </Text>
@@ -671,6 +671,7 @@ function Avatar({ source, size }: { source: string | null; size: number }) {
     <Image
       source={source ? { uri: source } : avatar}
       style={[styles.avatar, { width: size, height: size, borderRadius: size / 2 }]}
+      resizeMode="cover"
     />
   );
 }
@@ -734,7 +735,6 @@ const styles = StyleSheet.create({
   },
   actionIcon: {
     height: 18,
-    tintColor: colors.white,
     width: 18,
   },
   primaryActionText: {
@@ -806,7 +806,6 @@ const styles = StyleSheet.create({
   },
   avatar: {
     backgroundColor: colors.softGold,
-    resizeMode: 'cover',
   },
   cardTitle: {
     color: colors.black,

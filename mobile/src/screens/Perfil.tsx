@@ -489,6 +489,7 @@ function Avatar({ source, size }: { source: string | null; size: number }) {
     <Image
       source={source ? { uri: source } : avatar}
       style={[styles.avatar, { width: size, height: size, borderRadius: size / 2 }]}
+      resizeMode="cover"
     />
   );
 }
@@ -566,7 +567,6 @@ const styles = StyleSheet.create({
   },
   avatar: {
     backgroundColor: colors.softGold,
-    resizeMode: 'cover',
   },
   name: {
     color: colors.black,

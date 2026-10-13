@@ -20,7 +20,14 @@ export function Input({
 }: ComponentProps<typeof TextInput> & { icon?: number }) {
   return (
     <View style={styles.inputWrap}>
-      {icon && <Image source={icon} style={styles.inputIcon} />}
+      {icon && (
+        <Image
+          source={icon}
+          style={styles.inputIcon}
+          resizeMode="contain"
+          tintColor={colors.darkGold}
+        />
+      )}
       <TextInput
         placeholderTextColor="#777777"
         style={[styles.input, icon ? styles.inputWithIcon : undefined]}
@@ -157,8 +164,6 @@ const styles = StyleSheet.create({
     left: 18,
     width: 20,
     height: 20,
-    resizeMode: 'contain',
-    tintColor: colors.darkGold,
   },
   input: {
     minHeight: 56,
