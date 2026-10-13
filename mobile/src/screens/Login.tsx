@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { View } from 'react-native';
-import api from '../api';
+import api, { setSession } from '../api';
 import {
   Feedback,
   formStyles,
@@ -10,40 +10,40 @@ import {
   PrimaryButton,
   userIcon,
 } from '../components/FormControls';
-import type { Role, SessionProfile } from '../types';
+import type { Session, SessionProfile } from '../types';
 import { readError } from '../utils/errors';
 
 export function LoginScreen({
   feedback,
-  role,
   onFeedback,
-  onBackToRoles,
   onLoginSuccess,
   onRegister,
+  onRegisterBarberia,
 }: {
   feedback: string;
-  role: Role;
   onFeedback: (message: string) => void;
-  onBackToRoles: () => void;
   onLoginSuccess: (profile: SessionProfile) => void;
   onRegister: () => void;
+  onRegisterBarberia: () => void;
 }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
+    if (!email.trim() || !password) {
+      onFeedback('Ingresa tu correo y tu contraseña.');
+      return;
+    }
+
     setLoading(true);
     onFeedback('');
 
     try {
-      const response = await api.post('/auth/login', {
-        role,
-        email,
-        password,
-      });
-      api.defaults.headers.common.Authorization = `Bearer ${response.data.session.accessToken}`;
-      onLoginSuccess(response.data.profile);
+      // El rol ya no se elige: el backend lo deduce de la cuenta.
+      const response = await api.post('/auth/login', { email: email.trim(), password });
+      setSession(response.data.session as Session);
+      onLoginSuccess(response.data.profile as SessionProfile);
     } catch (error) {
       onFeedback(readError(error, 'No fue posible iniciar sesión'));
     } finally {
@@ -59,6 +59,7 @@ export function LoginScreen({
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
+        autoComplete="email"
         keyboardType="email-address"
       />
       <Input
@@ -66,25 +67,13 @@ export function LoginScreen({
         placeholder="Contraseña"
         value={password}
         onChangeText={setPassword}
+        onSubmitEditing={submit}
         secureTextEntry
       />
       <Feedback message={feedback} />
-      <PrimaryButton
-        label="Iniciar Sesión"
-        onPress={submit}
-        loading={loading}
-      />
-      {role === 'cliente' && (
-        <InlineLink
-          prefix="¿No tienes cuenta?"
-          label="Registrarse"
-          onPress={onRegister}
-        />
-      )}
-      <InlineLink
-        label="Volver a roles"
-        onPress={onBackToRoles}
-      />
+      <PrimaryButton label="Iniciar Sesión" onPress={submit} loading={loading} />
+      <InlineLink prefix="¿Eres cliente y no tienes cuenta?" label="Crear cuenta" onPress={onRegister} />
+      <InlineLink prefix="¿Tienes una barbería?" label="Registrar mi barbería" onPress={onRegisterBarberia} />
     </View>
   );
 }

@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -13,20 +13,21 @@ import {
   View,
 } from 'react-native';
 import { AppShell } from './src/components/AppShell';
-import api from './src/api';
+import api, { getAccessToken, setSession, setSessionExpiredHandler } from './src/api';
+import { AdminHomeScreen } from './src/screens/AdminHome';
 import { AgendaScreen } from './src/screens/Agenda';
 import { HomeScreen } from './src/screens/Home';
 import { LoginScreen } from './src/screens/Login';
 import { PerfilScreen } from './src/screens/Perfil';
 import { RegisterScreen } from './src/screens/Register';
-import { RoleScreen } from './src/screens/Role';
+import { RegisterBarberiaScreen } from './src/screens/RegisterBarberia';
 import { colors, fonts } from './src/theme';
 import type { AppScreen, Role, Screen, SessionProfile } from './src/types';
 
 const logo = require('./assets/icon.png');
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('role');
+  const [screen, setScreen] = useState<Screen>('login');
   const [role, setRole] = useState<Role>('cliente');
   const [profile, setProfile] = useState<SessionProfile | null>(null);
   const [barberoId, setBarberoId] = useState<string | undefined>();
@@ -39,38 +40,50 @@ export default function App() {
   });
 
   const title = useMemo(() => {
-    if (screen === 'role') return 'Bienvenido';
-    if (screen === 'register') return 'Registrarse';
     if (screen === 'login') return 'Iniciar Sesión';
+    if (screen === 'register') return 'Crear cuenta';
+    if (screen === 'registerBarberia') return 'Registrar mi barbería';
     return '';
   }, [screen]);
 
-  const goToLogin = (nextRole: Role) => {
-    setFeedback('');
-    setRole(nextRole);
+  /** Deja la app en la pantalla de login, sin sesión, con un mensaje opcional. */
+  const endSession = (message = '') => {
+    setSession(null);
+    setProfile(null);
+    setBarberoId(undefined);
+    setRole('cliente');
+    setFeedback(message);
     setScreen('login');
   };
 
-  const goToRegister = () => {
+  // Si el token no se puede renovar, el interceptor de api.ts avisa aquí.
+  useEffect(() => {
+    setSessionExpiredHandler(() => endSession('Tu sesión expiró. Inicia sesión de nuevo.'));
+    return () => setSessionExpiredHandler(null);
+  }, []);
+
+  const goTo = (next: Screen) => {
     setFeedback('');
-    setRole('cliente');
-    setScreen('register');
+    setScreen(next);
   };
 
   const handleLoginSuccess = (nextProfile: SessionProfile) => {
     setProfile(nextProfile);
     setRole(nextProfile.role);
+    setBarberoId(undefined);
     setFeedback('');
     setScreen('home');
   };
 
   const handleLogout = () => {
-    delete api.defaults.headers.common.Authorization;
-    setProfile(null);
-    setBarberoId(undefined);
-    setFeedback('');
-    setRole('cliente');
-    setScreen('role');
+    // Se invalida el token en el servidor sin esperar la respuesta.
+    const token = getAccessToken();
+    if (token) {
+      api
+        .post('/auth/logout', null, { headers: { Authorization: `Bearer ${token}` } })
+        .catch(() => undefined);
+    }
+    endSession();
   };
 
   if (!fontsLoaded) {
@@ -88,27 +101,28 @@ export default function App() {
     return (
       <AppShell
         activeScreen={appScreen}
+        brandName={profile?.barberia?.nombre ?? 'EdgeTimer'}
+        role={activeRole}
         onLogout={handleLogout}
         onNavigate={(nextScreen) => {
-          if (nextScreen === 'perfil') {
-            if (profile?.role === 'barbero') {
-              setBarberoId(profile.id);
-            } else {
-              setBarberoId(undefined);
-            }
-          }
+          // El perfil propio se abre sin barbero seleccionado.
+          if (nextScreen === 'perfil') setBarberoId(undefined);
           setScreen(nextScreen);
         }}
       >
         {appScreen === 'home' ? (
-          <HomeScreen
-            profile={profile}
-            role={activeRole}
-            onViewBarbero={(id) => {
-              setBarberoId(id);
-              setScreen('perfil');
-            }}
-          />
+          activeRole === 'admin' ? (
+            <AdminHomeScreen profile={profile} />
+          ) : (
+            <HomeScreen
+              profile={profile}
+              role={activeRole}
+              onViewBarbero={(id) => {
+                setBarberoId(id);
+                setScreen('perfil');
+              }}
+            />
+          )
         ) : appScreen === 'agenda' ? (
           <AgendaScreen profile={profile} role={activeRole} />
         ) : (
@@ -116,6 +130,7 @@ export default function App() {
             profile={profile}
             role={activeRole}
             barberoId={barberoId}
+            onAccountDeleted={() => endSession('Tu cuenta fue eliminada.')}
             onBack={() => {
               setBarberoId(undefined);
               setScreen('home');
@@ -141,10 +156,13 @@ export default function App() {
           <Image source={logo} style={styles.logo} />
           <Text style={styles.title}>{title}</Text>
 
-          {screen === 'role' && (
-            <RoleScreen
-              onBarber={() => goToLogin('barbero')}
-              onClient={goToRegister}
+          {screen === 'login' && (
+            <LoginScreen
+              feedback={feedback}
+              onFeedback={setFeedback}
+              onLoginSuccess={handleLoginSuccess}
+              onRegister={() => goTo('register')}
+              onRegisterBarberia={() => goTo('registerBarberia')}
             />
           )}
 
@@ -152,33 +170,25 @@ export default function App() {
             <RegisterScreen
               feedback={feedback}
               onFeedback={setFeedback}
-              onBackToRoles={() => {
-                setFeedback('');
-                setScreen('role');
-              }}
+              onBackToLogin={() => goTo('login')}
               onRegistered={() => {
-                setFeedback('Registro exitoso. Ahora inicia sesion.');
+                setFeedback('Registro exitoso. Ahora inicia sesión.');
                 setScreen('login');
               }}
-              onLogin={() => goToLogin('cliente')}
             />
           )}
 
-          {screen === 'login' && (
-            <LoginScreen
+          {screen === 'registerBarberia' && (
+            <RegisterBarberiaScreen
               feedback={feedback}
-              role={role}
               onFeedback={setFeedback}
-              onBackToRoles={() => {
-                setFeedback('');
-                setScreen('role');
+              onBackToLogin={() => goTo('login')}
+              onRegistered={() => {
+                setFeedback('Registro exitoso. Ahora inicia sesión con tu cuenta de administrador.');
+                setScreen('login');
               }}
-              onLoginSuccess={handleLoginSuccess}
-              onRegister={goToRegister}
             />
           )}
-
-          {profile && <Text style={styles.hiddenText}>{profile.usuario}</Text>}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -217,8 +227,5 @@ const styles = StyleSheet.create({
     fontSize: 38,
     marginBottom: 28,
     textAlign: 'center',
-  },
-  hiddenText: {
-    display: 'none',
   },
 });

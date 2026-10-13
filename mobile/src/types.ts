@@ -1,15 +1,32 @@
-export type Role = 'cliente' | 'barbero';
-export type AuthScreen = 'role' | 'login' | 'register';
+export type Role = 'cliente' | 'barbero' | 'admin';
+export type AuthScreen = 'login' | 'register' | 'registerBarberia';
 export type AppScreen = 'home' | 'agenda' | 'perfil';
 export type Screen = AuthScreen | AppScreen;
+
+export interface BarberiaResumen {
+  id: string;
+  nombre: string;
+  direccion: string | null;
+  telefono: string | null;
+}
+
+export interface Session {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt?: number;
+}
 
 export interface SessionProfile {
   id: string;
   nombre: string;
   usuario: string;
   role: Role;
+  email?: string | null;
+  telefono?: string | null;
   foto?: string | null;
-  createdAt?: string;
+  createdAt?: string | null;
+  idBarberia?: string | null;
+  barberia?: BarberiaResumen | null;
 }
 
 export type EstadoCita =

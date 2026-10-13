@@ -1,6 +1,16 @@
-import { Controller, Get, Param, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import {
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import type { AuthUser } from '../common/auth/auth-user';
+import { CurrentUser } from '../common/auth/decorators';
 import {
   CatalogosService,
   type UploadedBarberoPhotoFile,
@@ -27,7 +37,15 @@ export class CatalogosController {
       storage: memoryStorage(),
     }),
   )
-  uploadBarberoFoto(@Param('id') id: string, @UploadedFile() file: UploadedBarberoPhotoFile) {
+  uploadBarberoFoto(
+    @Param('id') id: string,
+    @UploadedFile() file: UploadedBarberoPhotoFile,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // Obsoleto: usar POST /auth/me/foto. Solo el propio barbero puede cambiar su foto.
+    if (user.role !== 'barbero' || user.profileId !== id) {
+      throw new ForbiddenException('No tienes permisos para esta acción.');
+    }
     return this.catalogosService.uploadBarberoPhoto(id, file);
   }
 
@@ -37,7 +55,15 @@ export class CatalogosController {
       storage: memoryStorage(),
     }),
   )
-  uploadClienteFoto(@Param('id') id: string, @UploadedFile() file: UploadedClientePhotoFile) {
+  uploadClienteFoto(
+    @Param('id') id: string,
+    @UploadedFile() file: UploadedClientePhotoFile,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // Obsoleto: usar POST /auth/me/foto. Solo el propio cliente puede cambiar su foto.
+    if (user.role !== 'cliente' || user.profileId !== id) {
+      throw new ForbiddenException('No tienes permisos para esta acción.');
+    }
     return this.catalogosService.uploadClientePhoto(id, file);
   }
 

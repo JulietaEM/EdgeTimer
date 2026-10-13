@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { colors, fonts } from '../theme';
-import type { AppScreen } from '../types';
+import type { AppScreen, Role } from '../types';
 
 const logo = require('../../assets/icon.png');
 const homeIcon = require('../../assets/home.png');
@@ -20,12 +20,17 @@ const logoutIcon = require('../../assets/logout.png');
 
 export function AppShell({
   activeScreen,
+  brandName,
   children,
+  role,
   onLogout,
   onNavigate,
 }: {
   activeScreen: AppScreen;
+  /** Nombre de la barbería del usuario (o EdgeTimer para clientes). */
+  brandName: string;
   children: ReactNode;
+  role: Role;
   onLogout: () => void;
   onNavigate: (screen: AppScreen) => void;
 }) {
@@ -37,27 +42,31 @@ export function AppShell({
     <View style={[styles.menuPanel, isDesktop ? styles.sidebar : styles.mobilePanel]}>
       <View style={styles.brandRow}>
         <Image source={logo} style={styles.logo} />
-        <Text style={styles.brandText}>AlphaCorte</Text>
+        <Text style={styles.brandText} numberOfLines={1}>
+          {brandName}
+        </Text>
       </View>
 
       <MenuButton
         active={activeScreen === 'home'}
         icon={homeIcon}
-        label="Home"
+        label={role === 'admin' ? 'Panel' : 'Home'}
         onPress={() => {
           onNavigate('home');
           setMenuOpen(false);
         }}
       />
-      <MenuButton
-        active={activeScreen === 'agenda'}
-        icon={calendarIcon}
-        label="Agenda"
-        onPress={() => {
-          onNavigate('agenda');
-          setMenuOpen(false);
-        }}
-      />
+      {role !== 'admin' ? (
+        <MenuButton
+          active={activeScreen === 'agenda'}
+          icon={calendarIcon}
+          label="Agenda"
+          onPress={() => {
+            onNavigate('agenda');
+            setMenuOpen(false);
+          }}
+        />
+      ) : null}
       <MenuButton
         active={activeScreen === 'perfil'}
         icon={userIcon}
@@ -81,7 +90,9 @@ export function AppShell({
             <View style={styles.mobileHeader}>
               <View style={styles.mobileBrandRow}>
                 <Image source={logo} style={styles.mobileLogo} />
-                <Text style={styles.brandText}>AlphaCorte</Text>
+                <Text style={styles.brandText} numberOfLines={1}>
+                  {brandName}
+                </Text>
               </View>
               <Pressable
                 onPress={() => setMenuOpen((current) => !current)}
@@ -186,6 +197,7 @@ const styles = StyleSheet.create({
   },
   brandText: {
     color: colors.black,
+    flexShrink: 1,
     fontFamily: fonts.title,
     fontSize: 24,
   },
