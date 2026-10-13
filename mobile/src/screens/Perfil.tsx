@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Image,
   Platform,
@@ -6,13 +6,16 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import api from '../api';
+import { FormModal } from '../components/FormModal';
 import { colors, fonts } from '../theme';
 import type { Barbero, Role, SessionProfile } from '../types';
+import { readError } from '../utils/errors';
 
 const avatar = require('../../assets/user.png');
 
@@ -20,22 +23,25 @@ export function PerfilScreen({
   profile,
   role,
   barberoId,
+  onAccountDeleted,
   onBack,
   onProfileUpdate,
 }: {
   profile: SessionProfile | null;
   role: Role;
   barberoId?: string;
+  onAccountDeleted: () => void;
   onBack: () => void;
   onProfileUpdate: (profile: SessionProfile) => void;
 }) {
-  const isBarber = role === 'barbero';
   const { width } = useWindowDimensions();
   const isCompact = width < 620;
   const [barbero, setBarbero] = useState<Barbero | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const loadBarbero = async () => {
     if (!barberoId) return;
@@ -71,7 +77,7 @@ export function PerfilScreen({
     if (Platform.OS === 'web') {
       const response = await fetch(uri);
       const blob = await response.blob();
-      const file = new File([blob], name, { type });
+      const file = new File([blob], name, { type: blob.type || type });
       formData.append('photo', file);
       return formData;
     }
@@ -88,16 +94,9 @@ export function PerfilScreen({
 
     setUploading(true);
     try {
-      const fileName = uri.split('/').pop() || `perfil-${Date.now()}.jpg`;
-      const match = /\.(\w+)$/.exec(fileName);
-      const type = match ? `image/${match[1]}` : 'image/jpeg';
-      const body = await createFormData(uri, fileName, type);
-      const endpoint =
-        role === 'barbero'
-          ? `/catalogos/barberos/${profile.id}/foto`
-          : `/catalogos/clientes/${profile.id}/foto`;
-
-      const response = await api.post(endpoint, body);
+      const { name, type } = describeImage(uri);
+      const body = await createFormData(uri, name, type);
+      const response = await api.post('/auth/me/foto', body);
       const uploadedUrl = response.data?.url;
 
       if (uploadedUrl) {
@@ -105,13 +104,8 @@ export function PerfilScreen({
       }
 
       showToast('Foto subida correctamente.');
-      if (barberoId) {
-        await loadBarbero();
-      }
     } catch (error: any) {
-      showToast(
-        error?.response?.data?.message || error?.message || 'Error al subir la foto.',
-      );
+      showToast(readError(error, error?.message || 'Error al subir la foto.'));
     } finally {
       setUploading(false);
     }
@@ -171,25 +165,14 @@ export function PerfilScreen({
         ) : barberoId && !barbero ? (
           <Text style={styles.empty}>No se pudo cargar el perfil del barbero.</Text>
         ) : barberoId && barbero ? (
-          <BarberPerfilContent
-            barbero={barbero}
-            isCompact={isCompact}
-            canUpload={barberoId === profile?.id && role === 'barbero'}
-            onUploadPhoto={pickImage}
-            uploading={uploading}
-          />
-        ) : isBarber ? (
-          <BarberOwnProfile
-            profile={profile}
-            isCompact={isCompact}
-            onUploadPhoto={pickImage}
-            uploading={uploading}
-            formatRegistrationDate={formatRegistrationDate}
-          />
+          <BarberPerfilContent barbero={barbero} isCompact={isCompact} />
         ) : (
-          <ClientProfile
+          <OwnProfile
             profile={profile}
+            role={role}
             isCompact={isCompact}
+            onDelete={() => setDeleteOpen(true)}
+            onEdit={() => setEditOpen(true)}
             onUploadPhoto={pickImage}
             uploading={uploading}
             formatRegistrationDate={formatRegistrationDate}
@@ -197,41 +180,36 @@ export function PerfilScreen({
         )}
       </ScrollView>
 
+      <EditProfileModal
+        open={editOpen}
+        profile={profile}
+        onClose={() => setEditOpen(false)}
+        onSaved={(next, message) => {
+          onProfileUpdate(next);
+          setEditOpen(false);
+          showToast(message);
+        }}
+      />
+
+      <DeleteAccountModal
+        open={deleteOpen}
+        role={role}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={onAccountDeleted}
+      />
+
       {toast ? <Text style={styles.toast}>{toast}</Text> : null}
     </View>
   );
 }
 
-function BarberPerfilContent({
-  barbero,
-  isCompact,
-  canUpload,
-  onUploadPhoto,
-  uploading,
-}: {
-  barbero: Barbero;
-  isCompact: boolean;
-  canUpload: boolean;
-  onUploadPhoto: () => void;
-  uploading: boolean;
-}) {
+function BarberPerfilContent({ barbero, isCompact }: { barbero: Barbero; isCompact: boolean }) {
   return (
     <View>
       <View style={[styles.profileCard, isCompact && styles.fullWidthCard]}>
         <Avatar source={barbero.foto} size={120} />
         <Text style={styles.name}>{barbero.nombre}</Text>
         <Text style={styles.rating}>★ {barbero.promedioCalificacion.toFixed(1)}</Text>
-        {canUpload ? (
-          <Pressable
-            style={[styles.uploadButton, uploading && styles.disabled]}
-            onPress={onUploadPhoto}
-            disabled={uploading}
-          >
-            <Text style={styles.uploadButtonText}>
-              {uploading ? 'Subiendo...' : 'Actualizar foto'}
-            </Text>
-          </Pressable>
-        ) : null}
       </View>
 
       <SectionTitle title="Información" />
@@ -256,15 +234,38 @@ function BarberPerfilContent({
   );
 }
 
-function BarberOwnProfile({
+const ROLE_LABEL: Record<Role, string> = {
+  cliente: 'Cliente',
+  barbero: 'Barbero',
+  admin: 'Administrador',
+};
+
+function describeImage(uri: string) {
+  const dataType = /^data:(image\/[\w.+-]+);/.exec(uri)?.[1];
+  const extension = /\.(jpe?g|png|webp)(?:\?|$)/i.exec(uri)?.[1]?.toLowerCase();
+  const type =
+    dataType ??
+    (extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg');
+  const ext = type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg';
+
+  return { type, name: `perfil-${Date.now()}.${ext}` };
+}
+
+function OwnProfile({
   profile,
+  role,
   isCompact,
+  onDelete,
+  onEdit,
   onUploadPhoto,
   uploading,
   formatRegistrationDate,
 }: {
   profile: SessionProfile | null;
+  role: Role;
   isCompact: boolean;
+  onDelete: () => void;
+  onEdit: () => void;
   onUploadPhoto: () => void;
   uploading: boolean;
   formatRegistrationDate: (date?: string) => string;
@@ -274,7 +275,7 @@ function BarberOwnProfile({
       <View style={[styles.profileCard, isCompact && styles.fullWidthCard]}>
         <Avatar source={profile?.foto || null} size={120} />
         <Text style={styles.name}>{profile?.nombre || 'Tu nombre'}</Text>
-        <Text style={styles.role}>Barbero</Text>
+        <Text style={styles.role}>{ROLE_LABEL[role]}</Text>
         <Pressable
           style={[styles.uploadButton, uploading && styles.disabled]}
           onPress={onUploadPhoto}
@@ -287,61 +288,198 @@ function BarberOwnProfile({
       </View>
 
       <SectionTitle title="Información de cuenta" />
-      <InfoBox label="Usuario" value={profile?.usuario || 'No disponible'} />
+      {role !== 'admin' ? (
+        <InfoBox label="Usuario" value={profile?.usuario || 'No disponible'} />
+      ) : null}
+      <InfoBox label="Correo" value={profile?.email || 'No disponible'} />
+      <InfoBox label="Teléfono" value={profile?.telefono || 'No registrado'} />
+      {profile?.barberia ? <InfoBox label="Barbería" value={profile.barberia.nombre} /> : null}
       <InfoBox
         label="Registrado desde"
-        value={formatRegistrationDate(
-          profile?.createdAt ||
-            (profile as any)?.created_at ||
-            (profile as any)?.fecha_registro ||
-            (profile as any)?.fechaRegistro,
-        )}
+        value={formatRegistrationDate(profile?.createdAt ?? undefined)}
       />
+
+      <View style={styles.accountActions}>
+        <Pressable style={styles.uploadButton} onPress={onEdit}>
+          <Text style={styles.uploadButtonText}>Editar perfil</Text>
+        </Pressable>
+        <Pressable style={styles.dangerButton} onPress={onDelete}>
+          <Text style={styles.dangerButtonText}>Eliminar mi cuenta</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
 
-function ClientProfile({
+function EditProfileModal({
+  open,
   profile,
-  isCompact,
-  onUploadPhoto,
-  uploading,
-  formatRegistrationDate,
+  onClose,
+  onSaved,
 }: {
+  open: boolean;
   profile: SessionProfile | null;
-  isCompact: boolean;
-  onUploadPhoto: () => void;
-  uploading: boolean;
-  formatRegistrationDate: (date?: string) => string;
+  onClose: () => void;
+  onSaved: (profile: SessionProfile, message: string) => void;
 }) {
+  const [nombre, setNombre] = useState('');
+  const [telefono, setTelefono] = useState('');
+  const [email, setEmail] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setNombre(profile?.nombre ?? '');
+      setTelefono(profile?.telefono ?? '');
+      setEmail(profile?.email ?? '');
+      setError('');
+    }
+  }, [open, profile]);
+
+  const submit = async () => {
+    const changes: Record<string, string> = {};
+    if (nombre.trim() !== (profile?.nombre ?? '')) changes.nombre = nombre;
+    if (telefono.trim() !== (profile?.telefono ?? '')) changes.telefono = telefono;
+    if (email.trim() !== (profile?.email ?? '')) changes.email = email;
+
+    if (Object.keys(changes).length === 0) {
+      onClose();
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    try {
+      const response = await api.patch('/auth/me', changes);
+      onSaved(response.data.profile as SessionProfile, response.data.message || 'Perfil actualizado.');
+    } catch (err) {
+      setError(readError(err, 'No fue posible guardar los cambios.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormModal
+      loading={saving}
+      open={open}
+      submitLabel="Guardar"
+      title="Editar perfil"
+      onClose={onClose}
+      onSubmit={submit}
+    >
+      <LabeledInput label="Nombre" value={nombre} onChangeText={setNombre} />
+      <LabeledInput
+        label="Teléfono"
+        value={telefono}
+        onChangeText={setTelefono}
+        keyboardType="phone-pad"
+      />
+      <LabeledInput
+        label="Correo"
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
+      />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </FormModal>
+  );
+}
+
+const DELETE_WARNING: Record<Role, string> = {
+  cliente:
+    'Se cancelarán tus citas próximas y se borrará tu información personal. Tu historial se conserva sin datos que te identifiquen.',
+  barbero:
+    'Se borrará tu información personal. No podrás eliminar tu cuenta si tienes citas próximas.',
+  admin:
+    'Se borrará tu cuenta de administrador. Si eres el único administrador de tu barbería, primero debes agregar a otro.',
+};
+
+function DeleteAccountModal({
+  open,
+  role,
+  onClose,
+  onDeleted,
+}: {
+  open: boolean;
+  role: Role;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+  const [error, setError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setPassword('');
+      setConfirmed(false);
+      setError('');
+    }
+  }, [open]);
+
+  const submit = async () => {
+    if (!confirmed) {
+      setError('Marca la casilla para confirmar que entiendes que no se puede deshacer.');
+      return;
+    }
+    if (!password) {
+      setError('Ingresa tu contraseña para continuar.');
+      return;
+    }
+
+    setDeleting(true);
+    setError('');
+    try {
+      await api.delete('/auth/me', { data: { password } });
+      onDeleted();
+    } catch (err) {
+      setError(readError(err, 'No fue posible eliminar la cuenta.'));
+      setDeleting(false);
+    }
+  };
+
+  return (
+    <FormModal
+      danger
+      loading={deleting}
+      open={open}
+      submitLabel="Eliminar definitivamente"
+      title="Eliminar mi cuenta"
+      onClose={onClose}
+      onSubmit={submit}
+    >
+      <Text style={styles.cardText}>{DELETE_WARNING[role]}</Text>
+      <Pressable style={styles.confirmRow} onPress={() => setConfirmed((value) => !value)}>
+        <View style={[styles.confirmBox, confirmed && styles.confirmBoxChecked]}>
+          {confirmed ? <Text style={styles.confirmMark}>✓</Text> : null}
+        </View>
+        <Text style={[styles.cardText, styles.confirmText]}>
+          Entiendo que esta acción no se puede deshacer.
+        </Text>
+      </Pressable>
+      <LabeledInput
+        label="Confirma tu contraseña"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+      />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </FormModal>
+  );
+}
+
+function LabeledInput({
+  label,
+  ...props
+}: { label: string } & React.ComponentProps<typeof TextInput>) {
   return (
     <View>
-      <View style={[styles.profileCard, isCompact && styles.fullWidthCard]}>
-        <Avatar source={profile?.foto || null} size={120} />
-        <Text style={styles.name}>{profile?.nombre || 'Tu nombre'}</Text>
-        <Text style={styles.role}>Cliente</Text>
-        <Pressable
-          style={[styles.uploadButton, uploading && styles.disabled]}
-          onPress={onUploadPhoto}
-          disabled={uploading}
-        >
-          <Text style={styles.uploadButtonText}>
-            {uploading ? 'Subiendo...' : 'Actualizar foto'}
-          </Text>
-        </Pressable>
-      </View>
-
-      <SectionTitle title="Información de Cuenta" />
-      <InfoBox label="Usuario" value={profile?.usuario || 'No disponible'} />
-      <InfoBox
-        label="Registrado desde"
-        value={formatRegistrationDate(
-          profile?.createdAt ||
-            (profile as any)?.created_at ||
-            (profile as any)?.fecha_registro ||
-            (profile as any)?.fechaRegistro,
-        )}
-      />
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput placeholderTextColor={colors.muted} style={styles.input} {...props} />
     </View>
   );
 }
@@ -528,6 +666,74 @@ const styles = StyleSheet.create({
     fontFamily: fonts.medium,
     fontSize: 18,
     marginBottom: 20,
+  },
+  accountActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 24,
+    marginTop: 8,
+  },
+  dangerButton: {
+    alignSelf: 'flex-start',
+    borderColor: colors.danger,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  dangerButtonText: {
+    color: colors.danger,
+    fontFamily: fonts.title,
+    fontSize: 16,
+  },
+  fieldLabel: {
+    color: colors.black,
+    fontFamily: fonts.medium,
+    fontSize: 19,
+    marginBottom: 7,
+  },
+  input: {
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: colors.black,
+    fontFamily: fonts.medium,
+    fontSize: 19,
+    minHeight: 48,
+    paddingHorizontal: 12,
+  },
+  error: {
+    color: colors.danger,
+    fontFamily: fonts.medium,
+    fontSize: 18,
+  },
+  confirmRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  confirmBox: {
+    alignItems: 'center',
+    borderColor: colors.danger,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  confirmBoxChecked: {
+    backgroundColor: colors.danger,
+  },
+  confirmMark: {
+    color: colors.white,
+    fontFamily: fonts.title,
+    fontSize: 16,
+    lineHeight: 18,
+  },
+  confirmText: {
+    flex: 1,
   },
   toast: {
     position: 'absolute',

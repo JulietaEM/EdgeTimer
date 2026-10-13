@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -71,6 +71,30 @@ export function SecondaryButton({
       style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
     >
       <Text style={styles.secondaryText}>{label}</Text>
+    </Pressable>
+  );
+}
+
+export function Checkbox({
+  checked,
+  children,
+  onToggle,
+}: {
+  checked: boolean;
+  children: ReactNode;
+  onToggle: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      onPress={onToggle}
+      style={styles.checkboxRow}
+    >
+      <View style={[styles.checkboxBox, checked && styles.checkboxBoxChecked]}>
+        {checked ? <Text style={styles.checkboxMark}>✓</Text> : null}
+      </View>
+      <View style={styles.checkboxLabel}>{children}</View>
     </Pressable>
   );
 }
@@ -196,6 +220,34 @@ const styles = StyleSheet.create({
     color: colors.darkGold,
     fontSize: 16,
     fontFamily: fonts.title,
+  },
+  checkboxRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  checkboxBox: {
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderColor: colors.gold,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    height: 24,
+    justifyContent: 'center',
+    marginTop: 2,
+    width: 24,
+  },
+  checkboxBoxChecked: {
+    backgroundColor: colors.gold,
+  },
+  checkboxMark: {
+    color: colors.white,
+    fontFamily: fonts.title,
+    fontSize: 16,
+    lineHeight: 18,
+  },
+  checkboxLabel: {
+    flex: 1,
   },
   feedback: {
     textAlign: 'center',

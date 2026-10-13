@@ -88,6 +88,9 @@ backend/node_modules/
 backend/.env
 backend/dist/
 
+#Mobile
+mobile/.env
+
 # Specs
 specs/
 

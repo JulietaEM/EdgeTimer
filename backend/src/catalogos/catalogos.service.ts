@@ -23,16 +23,68 @@ const CLIENTE_BUCKETS = [
 
 @Injectable()
 export class CatalogosService {
-  async barberos() {
+  async barberias() {
     const { data, error } = await supabaseAdmin
+      .from('barberia')
+      .select(
+        `
+          id_barberia,
+          nombre,
+          descripcion,
+          direccion,
+          telefono,
+          email,
+          logo_url,
+          activo
+        `,
+      )
+      .eq('activo', true)
+      .order('nombre', { ascending: true });
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    return Promise.all((data || []).map((barberia: any) => this.mapBarberia(barberia)));
+  }
+
+  async barberiaById(id: string) {
+    const { data, error } = await supabaseAdmin
+      .from('barberia')
+      .select(
+        `
+          id_barberia,
+          nombre,
+          descripcion,
+          direccion,
+          telefono,
+          email,
+          logo_url,
+          activo
+        `,
+      )
+      .eq('id_barberia', id)
+      .single();
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    return this.mapBarberia(data);
+  }
+
+  async barberos(idBarberia?: string) {
+    let request = supabaseAdmin
       .from('barbero')
       .select(
         `
           id_barbero,
+          id_barberia,
           nombre_barbero,
           foto_perfil,
           promedio_calificacion,
           activo,
+          barberia:barberia(id_barberia, nombre, logo_url),
           barbero_procedimiento(
             procedimiento:procedimiento(id_procedimiento, nombre, precio, duracion_minutos)
           )
@@ -41,26 +93,17 @@ export class CatalogosService {
       .eq('activo', true)
       .order('nombre_barbero', { ascending: true });
 
+    if (idBarberia) {
+      request = request.eq('id_barberia', idBarberia);
+    }
+
+    const { data, error } = await request;
+
     if (error) {
       throw new InternalServerErrorException(error.message);
     }
 
-    return Promise.all((data || []).map(async (barbero: any) => ({
-      id: barbero.id_barbero,
-      nombre: barbero.nombre_barbero,
-      foto: await getSignedStorageUrl(barbero.foto_perfil),
-      promedioCalificacion: Number(barbero.promedio_calificacion || 0),
-      especialidades: (barbero.barbero_procedimiento || [])
-        .map((item: any) => item.procedimiento)
-        .filter(Boolean)
-        .map((item: any) => ({
-          id: item.id_procedimiento,
-          nombre: item.nombre,
-          precio: Number(item.precio || 0),
-          duracionMinutos: item.duracion_minutos,
-        })),
-      horarioLaboral: 'Lunes a viernes, 8am-6pm',
-    })));
+    return Promise.all((data || []).map((barbero: any) => this.mapBarbero(barbero)));
   }
 
   async barberoById(id: string) {
@@ -69,10 +112,12 @@ export class CatalogosService {
       .select(
         `
           id_barbero,
+          id_barberia,
           nombre_barbero,
           foto_perfil,
           promedio_calificacion,
           activo,
+          barberia:barberia(id_barberia, nombre, logo_url),
           barbero_procedimiento(
             procedimiento:procedimiento(id_procedimiento, nombre, precio, duracion_minutos)
           )
@@ -85,22 +130,7 @@ export class CatalogosService {
       throw new InternalServerErrorException(error.message);
     }
 
-    return {
-      id: data.id_barbero,
-      nombre: data.nombre_barbero,
-      foto: await getSignedStorageUrl(data.foto_perfil),
-      promedioCalificacion: Number(data.promedio_calificacion || 0),
-      especialidades: (data.barbero_procedimiento || [])
-        .map((item: any) => item.procedimiento)
-        .filter(Boolean)
-        .map((item: any) => ({
-          id: item.id_procedimiento,
-          nombre: item.nombre,
-          precio: Number(item.precio || 0),
-          duracionMinutos: item.duracion_minutos,
-        })),
-      horarioLaboral: 'Lunes a viernes, 8am-6pm',
-    };
+    return this.mapBarbero(data);
   }
 
   private async uploadToBucket(
@@ -189,12 +219,18 @@ export class CatalogosService {
     return { url: signedUrl || photoUrl };
   }
 
-  async procedimientos() {
-    const { data, error } = await supabaseAdmin
+  async procedimientos(idBarberia?: string) {
+    let request = supabaseAdmin
       .from('procedimiento')
-      .select('id_procedimiento, nombre, descripcion, precio, duracion_minutos')
+      .select('id_procedimiento, id_barberia, nombre, descripcion, precio, duracion_minutos')
       .eq('activo', true)
       .order('nombre', { ascending: true });
+
+    if (idBarberia) {
+      request = request.eq('id_barberia', idBarberia);
+    }
+
+    const { data, error } = await request;
 
     if (error) {
       throw new InternalServerErrorException(error.message);
@@ -202,10 +238,78 @@ export class CatalogosService {
 
     return (data || []).map((item: any) => ({
       id: item.id_procedimiento,
+      idBarberia: item.id_barberia,
       nombre: item.nombre,
       descripcion: item.descripcion || '',
       precio: Number(item.precio || 0),
       duracionMinutos: item.duracion_minutos,
     }));
+  }
+
+  async disponibilidades(idBarbero: string) {
+    const { data, error } = await supabaseAdmin
+      .from('disponibilidad_barbero')
+      .select('id_disponibilidad, id_barbero, dia_semana, hora_inicio, hora_fin, activo')
+      .eq('id_barbero', idBarbero)
+      .eq('activo', true)
+      .order('dia_semana', { ascending: true })
+      .order('hora_inicio', { ascending: true });
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    return (data || []).map((item: any) => ({
+      id: item.id_disponibilidad,
+      idBarbero: item.id_barbero,
+      diaSemana: item.dia_semana,
+      horaInicio: item.hora_inicio,
+      horaFin: item.hora_fin,
+      activo: item.activo,
+    }));
+  }
+
+  private async mapBarberia(barberia: any) {
+    return {
+      id: barberia.id_barberia,
+      nombre: barberia.nombre,
+      descripcion: barberia.descripcion || '',
+      direccion: barberia.direccion || '',
+      telefono: barberia.telefono || '',
+      email: barberia.email || '',
+      logo: await getSignedStorageUrl(barberia.logo_url),
+      activo: barberia.activo,
+    };
+  }
+
+  private async mapBarbero(barbero: any) {
+    const barberia = Array.isArray(barbero.barberia)
+      ? barbero.barberia[0]
+      : barbero.barberia;
+
+    return {
+      id: barbero.id_barbero,
+      idBarberia: barbero.id_barberia,
+      barberia: barberia
+        ? {
+            id: barberia.id_barberia,
+            nombre: barberia.nombre,
+            logo: await getSignedStorageUrl(barberia.logo_url),
+          }
+        : null,
+      nombre: barbero.nombre_barbero,
+      foto: await getSignedStorageUrl(barbero.foto_perfil),
+      promedioCalificacion: Number(barbero.promedio_calificacion || 0),
+      especialidades: (barbero.barbero_procedimiento || [])
+        .map((item: any) => item.procedimiento)
+        .filter(Boolean)
+        .map((item: any) => ({
+          id: item.id_procedimiento,
+          nombre: item.nombre,
+          precio: Number(item.precio || 0),
+          duracionMinutos: item.duracion_minutos,
+        })),
+      horarioLaboral: 'Disponibilidad configurable por barbero',
+    };
   }
 }
