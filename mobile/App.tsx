@@ -16,18 +16,25 @@ import { AppShell } from './src/components/AppShell';
 import api, { getAccessToken, setSession, setSessionExpiredHandler } from './src/api';
 import { AdminHomeScreen } from './src/screens/AdminHome';
 import { AgendaScreen } from './src/screens/Agenda';
+import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
 import { HomeScreen } from './src/screens/Home';
 import { LoginScreen } from './src/screens/Login';
 import { PerfilScreen } from './src/screens/Perfil';
 import { RegisterScreen } from './src/screens/Register';
 import { RegisterBarberiaScreen } from './src/screens/RegisterBarberia';
+import { ResetPasswordScreen } from './src/screens/ResetPassword';
 import { colors, fonts } from './src/theme';
 import type { AppScreen, Role, Screen, SessionProfile } from './src/types';
+import { clearRecoveryToken, readRecoveryToken } from './src/utils/recoveryLink';
 
 const logo = require('./assets/icon.png');
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('login');
+  // Si la web se abre desde el enlace del correo, empieza en "nueva contraseña".
+  const [recoveryToken, setRecoveryToken] = useState<string | null>(readRecoveryToken);
+  const [screen, setScreen] = useState<Screen>(() =>
+    readRecoveryToken() ? 'resetPassword' : 'login',
+  );
   const [role, setRole] = useState<Role>('cliente');
   const [profile, setProfile] = useState<SessionProfile | null>(null);
   const [barberoId, setBarberoId] = useState<string | undefined>();
@@ -43,6 +50,8 @@ export default function App() {
     if (screen === 'login') return 'Iniciar Sesión';
     if (screen === 'register') return 'Crear cuenta';
     if (screen === 'registerBarberia') return 'Registrar mi barbería';
+    if (screen === 'forgotPassword') return 'Recuperar contraseña';
+    if (screen === 'resetPassword') return 'Nueva contraseña';
     return '';
   }, [screen]);
 
@@ -64,6 +73,11 @@ export default function App() {
 
   const goTo = (next: Screen) => {
     setFeedback('');
+    if (next !== 'resetPassword') {
+      // Salir de la pantalla de recuperación descarta el token de la URL.
+      clearRecoveryToken();
+      setRecoveryToken(null);
+    }
     setScreen(next);
   };
 
@@ -161,6 +175,7 @@ export default function App() {
               feedback={feedback}
               onFeedback={setFeedback}
               onLoginSuccess={handleLoginSuccess}
+              onForgotPassword={() => goTo('forgotPassword')}
               onRegister={() => goTo('register')}
               onRegisterBarberia={() => goTo('registerBarberia')}
             />
@@ -185,6 +200,29 @@ export default function App() {
               onBackToLogin={() => goTo('login')}
               onRegistered={() => {
                 setFeedback('Registro exitoso. Ahora inicia sesión con tu cuenta de administrador.');
+                setScreen('login');
+              }}
+            />
+          )}
+
+          {screen === 'forgotPassword' && (
+            <ForgotPasswordScreen
+              feedback={feedback}
+              onFeedback={setFeedback}
+              onBackToLogin={() => goTo('login')}
+            />
+          )}
+
+          {screen === 'resetPassword' && (
+            <ResetPasswordScreen
+              feedback={feedback}
+              tokenHash={recoveryToken ?? ''}
+              onFeedback={setFeedback}
+              onBackToLogin={() => goTo('login')}
+              onDone={(message) => {
+                clearRecoveryToken();
+                setRecoveryToken(null);
+                setFeedback(message);
                 setScreen('login');
               }}
             />

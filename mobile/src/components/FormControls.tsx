@@ -121,7 +121,7 @@ export function InlineLink({
 export function Feedback({ message }: { message: string }) {
   if (!message) return null;
 
-  const isSuccess = message.toLowerCase().includes('exitoso');
+  const isSuccess = /exitos|actualizad|enviamos|eliminada/i.test(message);
 
   return (
     <Text

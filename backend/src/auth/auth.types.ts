@@ -35,6 +35,16 @@ export interface RefreshDto {
   refreshToken: string;
 }
 
+export interface ForgotPasswordDto {
+  email: string;
+}
+
+export interface ResetPasswordDto {
+  /** Token de un solo uso que llega en el enlace del correo. */
+  tokenHash: string;
+  password: string;
+}
+
 export interface UpdateProfileDto {
   nombre?: string;
   telefono?: string | null;

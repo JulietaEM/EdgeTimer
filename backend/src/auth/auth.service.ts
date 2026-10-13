@@ -23,10 +23,12 @@ import {
 import type {
   AuthProfile,
   DeleteAccountDto,
+  ForgotPasswordDto,
   LoginDto,
   RefreshDto,
   RegisterBarberiaDto,
   RegisterClientDto,
+  ResetPasswordDto,
   UpdateProfileDto,
   UserRole,
 } from './auth.types';
@@ -66,6 +68,14 @@ const ROLE_CONFIG = {
     folder: 'administradores',
   },
 } as const satisfies Record<UserRole, Record<string, string>>;
+
+/** Página a la que lleva el enlace del correo (el frontend web). */
+const FRONTEND_URL = (
+  process.env.FRONTEND_URL ?? 'https://edge-timer-blue.vercel.app'
+).replace(/\/+$/, '');
+
+const FORGOT_PASSWORD_MESSAGE =
+  'Si el correo está registrado, te enviamos un enlace para restablecer tu contraseña.';
 
 /** Fila de cualquiera de las tablas de perfil (columnas de texto). */
 type ProfileRow = Record<string, string | null | undefined>;
@@ -318,6 +328,99 @@ export class AuthService {
     }
 
     return { message: 'Sesión cerrada' };
+  }
+
+  // ---------------------------------------------------------------------
+  // Recuperar contraseña (HU-05)
+  //
+  // 1) forgotPassword: Supabase envía un correo con un enlace a nuestro
+  //    frontend que lleva un token_hash de un solo uso.
+  // 2) resetPassword: el frontend nos manda ese token y la contraseña nueva;
+  //    aquí se verifica el token (Supabase valida que no haya expirado ni se
+  //    haya usado) y se cambia la contraseña.
+  // ---------------------------------------------------------------------
+
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const email = normalizeEmail(dto.email);
+
+    const { error } = await createAnonClient().auth.resetPasswordForEmail(
+      email,
+      { redirectTo: FRONTEND_URL },
+    );
+
+    // La respuesta es siempre la misma: así nadie puede descubrir qué
+    // correos están registrados probando direcciones.
+    if (error) {
+      this.logger.warn(
+        `No se pudo enviar el correo de recuperación: ${error.message}`,
+      );
+    }
+
+    return { message: FORGOT_PASSWORD_MESSAGE };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const tokenHash = requireText(dto.tokenHash, 'El enlace no es válido', 500);
+    const password = validatePassword(dto.password);
+
+    // Consume el token: si ya se usó o expiró, Supabase responde con error.
+    const { data, error } = await createAnonClient().auth.verifyOtp({
+      token_hash: tokenHash,
+      type: 'recovery',
+    });
+
+    if (error || !data.user || !data.session) {
+      throw new BadRequestException(
+        'El enlace no es válido o ya expiró. Solicita uno nuevo.',
+      );
+    }
+
+    const { error: errUpdate } = await supabaseAdmin.auth.admin.updateUserById(
+      data.user.id,
+      { password },
+    );
+
+    if (errUpdate) {
+      if (errUpdate.code === 'same_password') {
+        throw new BadRequestException(
+          'La nueva contraseña debe ser distinta a la anterior. Solicita un nuevo enlace para intentarlo otra vez.',
+        );
+      }
+      throw new InternalServerErrorException(
+        'No fue posible cambiar la contraseña. Solicita un nuevo enlace.',
+      );
+    }
+
+    // Cierra todas las sesiones abiertas (incluida la temporal de recuperación):
+    // quien tuviera la cuenta abierta con la contraseña vieja debe volver a entrar.
+    const { error: errSignOut } = await supabaseAdmin.auth.admin.signOut(
+      data.session.access_token,
+      'global',
+    );
+    if (errSignOut) {
+      this.logger.warn(
+        `No se pudieron cerrar las sesiones: ${errSignOut.message}`,
+      );
+    }
+
+    try {
+      const user = await loadAuthUser(data.session.access_token, data.user.id);
+      await this.audit({
+        userId: user.userId,
+        role: user.role,
+        entity: ROLE_CONFIG[user.role].table,
+        entityId: user.profileId,
+        action: 'restablecer_contrasena',
+        details: {},
+        idBarberia: user.idBarberia,
+      });
+    } catch {
+      // La auditoría nunca debe impedir el cambio de contraseña.
+    }
+
+    return {
+      message: 'Contraseña actualizada. Ya puedes iniciar sesión.',
+    };
   }
 
   // ---------------------------------------------------------------------
