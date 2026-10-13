@@ -20,10 +20,12 @@ import {
 import { AuthService } from './auth.service';
 import type {
   DeleteAccountDto,
+  ForgotPasswordDto,
   LoginDto,
   RefreshDto,
   RegisterBarberiaDto,
   RegisterClientDto,
+  ResetPasswordDto,
   UpdateProfileDto,
 } from './auth.types';
 
@@ -55,6 +57,20 @@ export class AuthController {
   @HttpCode(200)
   refresh(@Body() dto: RefreshDto) {
     return this.authService.refresh(dto);
+  }
+
+  @Public()
+  @Post('forgot-password')
+  @HttpCode(200)
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @Public()
+  @Post('reset-password')
+  @HttpCode(200)
+  resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 
   @Post('logout')

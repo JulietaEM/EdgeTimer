@@ -17,12 +17,14 @@ export function LoginScreen({
   feedback,
   onFeedback,
   onLoginSuccess,
+  onForgotPassword,
   onRegister,
   onRegisterBarberia,
 }: {
   feedback: string;
   onFeedback: (message: string) => void;
   onLoginSuccess: (profile: SessionProfile) => void;
+  onForgotPassword: () => void;
   onRegister: () => void;
   onRegisterBarberia: () => void;
 }) {
@@ -72,6 +74,7 @@ export function LoginScreen({
       />
       <Feedback message={feedback} />
       <PrimaryButton label="Iniciar Sesión" onPress={submit} loading={loading} />
+      <InlineLink label="¿Olvidaste tu contraseña?" onPress={onForgotPassword} />
       <InlineLink prefix="¿Eres cliente y no tienes cuenta?" label="Crear cuenta" onPress={onRegister} />
       <InlineLink prefix="¿Tienes una barbería?" label="Registrar mi barbería" onPress={onRegisterBarberia} />
     </View>

@@ -1,5 +1,10 @@
 export type Role = 'cliente' | 'barbero' | 'admin';
-export type AuthScreen = 'login' | 'register' | 'registerBarberia';
+export type AuthScreen =
+  | 'login'
+  | 'register'
+  | 'registerBarberia'
+  | 'forgotPassword'
+  | 'resetPassword';
 export type AppScreen = 'home' | 'agenda' | 'perfil';
 export type Screen = AuthScreen | AppScreen;
 

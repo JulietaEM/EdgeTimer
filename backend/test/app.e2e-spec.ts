@@ -70,6 +70,20 @@ describe('API (e2e, sin base de datos)', () => {
     expect(response.body.message).toContain('política');
   });
 
+  it('POST /auth/forgot-password es público y valida el correo (400)', () => {
+    return request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ email: 'no-es-correo' })
+      .expect(400);
+  });
+
+  it('POST /auth/reset-password es público y valida la contraseña (400)', () => {
+    return request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .send({ tokenHash: 'abc', password: 'corta' })
+      .expect(400);
+  });
+
   it('POST /auth/register-barberia valida la contraseña (400)', () => {
     return request(app.getHttpServer())
       .post('/auth/register-barberia')
