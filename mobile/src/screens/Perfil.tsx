@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import api from '../api';
+import api, { postForm } from '../api';
 import { FormModal } from '../components/FormModal';
 import { colors, fonts } from '../theme';
 import type { Barbero, Role, SessionProfile } from '../types';
@@ -96,7 +96,7 @@ export function PerfilScreen({
     try {
       const { name, type } = describeImage(uri);
       const body = await createFormData(uri, name, type);
-      const response = await api.post('/auth/me/foto', body);
+      const response = await postForm('/auth/me/foto', body);
       const uploadedUrl = response.data?.url;
 
       if (uploadedUrl) {
