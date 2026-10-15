@@ -115,6 +115,59 @@ function setSessionQuietly(next: Session | null) {
   session = next;
 }
 
+/**
+ * Envía un formulario con archivos (fotos). Se usa fetch y no axios porque, en
+ * algunos Android, axios falla con "Network Error" al enviar FormData con
+ * archivos, aunque el servidor esté bien. Si el token venció, lo renueva una vez.
+ * Los errores tienen la forma de los de axios, así que readError() los entiende.
+ */
+export async function postForm<T = any>(
+  path: string,
+  body: FormData,
+): Promise<{ data: T; status: number }> {
+  const send = async (token: string | null) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+
+    try {
+      return await fetch(`${baseURL}${path}`, {
+        method: 'POST',
+        body,
+        // Sin Content-Type: el sistema agrega solo el límite (boundary) del formulario.
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      const aborted = error instanceof Error && error.name === 'AbortError';
+      throw aborted
+        ? { code: 'ECONNABORTED', message: 'timeout' }
+        : { code: 'ERR_NETWORK', message: 'Network Error' };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let response = await send(getAccessToken());
+
+  if (response.status === 401 && session) {
+    const result = await refreshSession();
+    if (result.status === 'ok') {
+      response = await send(result.token);
+    } else if (result.status === 'invalid') {
+      setSession(null);
+      onSessionExpired?.();
+    }
+  }
+
+  const data = (await response.json().catch(() => ({}))) as T;
+
+  if (!response.ok) {
+    throw { response: { status: response.status, data } };
+  }
+
+  return { data, status: response.status };
+}
+
 type RetriableConfig = InternalAxiosRequestConfig & { _retried?: boolean };
 
 // Los tokens de Supabase duran 1 hora: ante un 401 se renueva una vez y se

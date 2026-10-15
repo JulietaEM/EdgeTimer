@@ -32,6 +32,32 @@ export interface SessionProfile {
   createdAt?: string | null;
   idBarberia?: string | null;
   barberia?: BarberiaResumen | null;
+  /** Cuenta creada por un administrador: debe elegir su propia contraseña. */
+  debeCambiarContrasena?: boolean;
+  /** Aún no ha aceptado la política de tratamiento de datos. */
+  terminosPendientes?: boolean;
+}
+
+export interface BarberoAdmin {
+  id: string;
+  nombre: string;
+  usuario: string;
+  email: string | null;
+  telefono: string | null;
+  foto: string | null;
+  promedioCalificacion: number;
+  pendienteCambioContrasena: boolean;
+  procedimientoIds: string[];
+  especialidades: { id: string; nombre: string }[];
+}
+
+export interface ProcedimientoAdmin {
+  id: string;
+  nombre: string;
+  descripcion: string;
+  precio: number;
+  duracionMinutos: number;
+  activo: boolean;
 }
 
 export type EstadoCita =
