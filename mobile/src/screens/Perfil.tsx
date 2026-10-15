@@ -6,13 +6,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import api, { postForm } from '../api';
 import { FormModal } from '../components/FormModal';
+import { LabeledInput } from '../components/LabeledInput';
 import { colors, fonts } from '../theme';
 import type { Barbero, Role, SessionProfile } from '../types';
 import { readError } from '../utils/errors';
@@ -42,6 +42,7 @@ export function PerfilScreen({
   const [toast, setToast] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   const loadBarbero = async () => {
     if (!barberoId) return;
@@ -173,6 +174,7 @@ export function PerfilScreen({
             isCompact={isCompact}
             onDelete={() => setDeleteOpen(true)}
             onEdit={() => setEditOpen(true)}
+            onChangePassword={() => setPasswordOpen(true)}
             onUploadPhoto={pickImage}
             uploading={uploading}
             formatRegistrationDate={formatRegistrationDate}
@@ -187,6 +189,15 @@ export function PerfilScreen({
         onSaved={(next, message) => {
           onProfileUpdate(next);
           setEditOpen(false);
+          showToast(message);
+        }}
+      />
+
+      <ChangePasswordModal
+        open={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+        onSaved={(message) => {
+          setPasswordOpen(false);
           showToast(message);
         }}
       />
@@ -255,6 +266,7 @@ function OwnProfile({
   profile,
   role,
   isCompact,
+  onChangePassword,
   onDelete,
   onEdit,
   onUploadPhoto,
@@ -264,6 +276,7 @@ function OwnProfile({
   profile: SessionProfile | null;
   role: Role;
   isCompact: boolean;
+  onChangePassword: () => void;
   onDelete: () => void;
   onEdit: () => void;
   onUploadPhoto: () => void;
@@ -302,6 +315,9 @@ function OwnProfile({
       <View style={styles.accountActions}>
         <Pressable style={styles.uploadButton} onPress={onEdit}>
           <Text style={styles.uploadButtonText}>Editar perfil</Text>
+        </Pressable>
+        <Pressable style={styles.uploadButton} onPress={onChangePassword}>
+          <Text style={styles.uploadButtonText}>Cambiar contraseña</Text>
         </Pressable>
         <Pressable style={styles.dangerButton} onPress={onDelete}>
           <Text style={styles.dangerButtonText}>Eliminar mi cuenta</Text>
@@ -382,6 +398,84 @@ function EditProfileModal({
         onChangeText={setEmail}
         autoCapitalize="none"
         keyboardType="email-address"
+      />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </FormModal>
+  );
+}
+
+function ChangePasswordModal({
+  open,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onSaved: (message: string) => void;
+}) {
+  const [current, setCurrent] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setCurrent('');
+      setPassword('');
+      setConfirm('');
+      setError('');
+    }
+  }, [open]);
+
+  const submit = async () => {
+    if (password !== confirm) {
+      setError('Las contraseñas nuevas no coinciden.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    try {
+      const response = await api.post('/auth/me/password', {
+        currentPassword: current,
+        newPassword: password,
+      });
+      onSaved(response.data.message || 'Contraseña actualizada.');
+    } catch (err) {
+      setError(readError(err, 'No fue posible cambiar la contraseña.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormModal
+      loading={saving}
+      open={open}
+      submitLabel="Cambiar contraseña"
+      title="Cambiar contraseña"
+      onClose={onClose}
+      onSubmit={submit}
+    >
+      <LabeledInput
+        label="Contraseña actual"
+        value={current}
+        onChangeText={setCurrent}
+        secureTextEntry
+      />
+      <LabeledInput
+        label="Contraseña nueva"
+        hint="8 o más caracteres, con letras y números"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+      />
+      <LabeledInput
+        label="Confirmar contraseña nueva"
+        value={confirm}
+        onChangeText={setConfirm}
+        secureTextEntry
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
     </FormModal>
@@ -469,18 +563,6 @@ function DeleteAccountModal({
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
     </FormModal>
-  );
-}
-
-function LabeledInput({
-  label,
-  ...props
-}: { label: string } & React.ComponentProps<typeof TextInput>) {
-  return (
-    <View>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput placeholderTextColor={colors.muted} style={styles.input} {...props} />
-    </View>
   );
 }
 

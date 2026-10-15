@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -21,6 +21,7 @@ import api, {
 } from './src/api';
 import { AdminHomeScreen } from './src/screens/AdminHome';
 import { AgendaScreen } from './src/screens/Agenda';
+import { ChangePasswordScreen } from './src/screens/ChangePassword';
 import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
 import { HomeScreen } from './src/screens/Home';
 import { LoginScreen } from './src/screens/Login';
@@ -134,6 +135,19 @@ function AppContent() {
     );
   }
 
+  // Cuenta creada por un administrador: antes de usar la app debe elegir su contraseña.
+  if (profile?.debeCambiarContrasena) {
+    return (
+      <AuthLayout title="Crea tu contraseña">
+        <ChangePasswordScreen
+          profile={profile}
+          onDone={(next) => setProfile(next)}
+          onLogout={handleLogout}
+        />
+      </AuthLayout>
+    );
+  }
+
   if (screen === 'home' || screen === 'agenda' || screen === 'perfil') {
     const appScreen = screen as AppScreen;
     const activeRole = profile?.role ?? role;
@@ -182,20 +196,7 @@ function AppContent() {
     );
   }
 
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.keyboardView}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Image source={logo} style={styles.logo} />
-          <Text style={styles.title}>{title}</Text>
-
+  return <AuthLayout title={title}>
           {screen === 'login' && (
             <LoginScreen
               feedback={feedback}
@@ -253,6 +254,25 @@ function AppContent() {
               }}
             />
           )}
+    </AuthLayout>;
+}
+
+/** Estructura común de las pantallas sin sesión: logo, título y contenido. */
+function AuthLayout({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="dark" />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboardView}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Image source={logo} style={styles.logo} />
+          <Text style={styles.title}>{title}</Text>
+          {children}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
