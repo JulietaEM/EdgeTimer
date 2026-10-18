@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   InternalServerErrorException,
   NotFoundException,
@@ -214,5 +215,174 @@ describe('AdminService', () => {
       mustChangePassword: true,
     });
     expect(result.message).toContain('contraseña temporal');
+  });
+
+  describe('procedimientos', () => {
+    const procedimientoRow = {
+      id_procedimiento: 'p-nuevo',
+      nombre: 'Corte clásico',
+      descripcion: null,
+      precio: '35000',
+      duracion_minutos: 45,
+      activo: true,
+    };
+
+    it('crea un procedimiento validando precio y duración', async () => {
+      const calls = fakeTables({ procedimiento: { data: procedimientoRow } });
+
+      const result = await service.createProcedimiento(admin, {
+        nombre: ' Corte clásico ',
+        precio: '35000',
+        duracionMinutos: 45,
+      });
+
+      expect(result.message).toBe('Procedimiento creado');
+      expect(result.procedimiento).toEqual({
+        id: 'p-nuevo',
+        nombre: 'Corte clásico',
+        descripcion: '',
+        precio: 35000,
+        duracionMinutos: 45,
+        activo: true,
+      });
+      expect(calls).toContainEqual({
+        table: 'procedimiento',
+        method: 'insert',
+        args: [
+          {
+            id_barberia: 'bar-1',
+            nombre: 'Corte clásico',
+            descripcion: null,
+            precio: 35000,
+            duracion_minutos: 45,
+            activo: true,
+          },
+        ],
+      });
+    });
+
+    it('no permite dos procedimientos con el mismo nombre (409)', async () => {
+      fakeTables({
+        procedimiento: { data: [{ id_procedimiento: 'ya-existe' }] },
+      });
+
+      await expect(
+        service.createProcedimiento(admin, {
+          nombre: 'Corte clásico',
+          precio: 35000,
+          duracionMinutos: 45,
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it.each([
+      ['precio negativo', { precio: -1, duracionMinutos: 45 }],
+      [
+        'duración que no es múltiplo de 15',
+        { precio: 1000, duracionMinutos: 20 },
+      ],
+    ])('rechaza %s (400)', async (_label, values) => {
+      fakeTables({ procedimiento: { data: [] } });
+
+      await expect(
+        service.createProcedimiento(admin, { nombre: 'Tinte', ...values }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('no deja editar un procedimiento de otra barbería (404)', async () => {
+      fakeTables({ procedimiento: { data: null } });
+
+      await expect(
+        service.updateProcedimiento(admin, 'p-ajeno', { precio: 1000 }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('desactiva un procedimiento y lo informa', async () => {
+      fakeTables({
+        procedimiento: { data: { ...procedimientoRow, activo: false } },
+      });
+
+      const result = await service.updateProcedimiento(admin, 'p-nuevo', {
+        activo: false,
+      });
+
+      expect(result.message).toBe('Procedimiento desactivado');
+      expect(result.procedimiento.activo).toBe(false);
+    });
+
+    it('exige al menos un cambio (400)', async () => {
+      fakeTables({ procedimiento: { data: procedimientoRow } });
+
+      await expect(
+        service.updateProcedimiento(admin, 'p-nuevo', {}),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('reseñas', () => {
+    const resena = (id: string, puntos: number) => ({
+      id_calificacion: id,
+      puntuacion_numerica: puntos,
+      resena: puntos === 5 ? 'Excelente' : null,
+      created_at: '2026-10-10T10:00:00Z',
+      cita: {
+        id_barbero: 'b1',
+        id_barberia: 'bar-1',
+        cliente: { nombre_cliente: 'Ana' },
+        barbero: { nombre_barbero: 'Carlos' },
+        cita_procedimiento: [{ procedimiento: { nombre: 'Corte clásico' } }],
+      },
+    });
+
+    it('lista las reseñas de la barbería con resumen y paginación', async () => {
+      const calls = fakeTables({
+        calificacion: {
+          data: [resena('c1', 5), resena('c2', 4), resena('c3', 3)],
+        },
+      });
+
+      const result = await service.listResenas(admin, { limit: '2' });
+
+      expect(result.items).toHaveLength(2);
+      expect(result.hayMas).toBe(true);
+      expect(result.resumen).toEqual({ promedio: 4, total: 3 });
+      expect(result.items[0]).toEqual({
+        id: 'c1',
+        puntuacion: 5,
+        comentario: 'Excelente',
+        fecha: '2026-10-10T10:00:00Z',
+        cliente: 'Ana',
+        barbero: 'Carlos',
+        barberoId: 'b1',
+        servicios: ['Corte clásico'],
+      });
+      expect(calls).toContainEqual({
+        table: 'calificacion',
+        method: 'eq',
+        args: ['cita.id_barberia', 'bar-1'],
+      });
+    });
+
+    it('filtra por barbero cuando se pide', async () => {
+      const calls = fakeTables({ calificacion: { data: [] } });
+
+      await service.listResenas(admin, {
+        barberoId: '11111111-1111-4111-8111-111111111111',
+      });
+
+      expect(calls).toContainEqual({
+        table: 'calificacion',
+        method: 'eq',
+        args: ['cita.id_barbero', '11111111-1111-4111-8111-111111111111'],
+      });
+    });
+
+    it('rechaza un barbero con id inválido (400)', async () => {
+      fakeTables({ calificacion: { data: [] } });
+
+      await expect(
+        service.listResenas(admin, { barberoId: 'no-es-uuid' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });

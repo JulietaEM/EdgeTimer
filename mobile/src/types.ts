@@ -120,3 +120,20 @@ export interface Cita {
     resena: string;
   } | null;
 }
+
+export interface ResenaAdmin {
+  id: string;
+  puntuacion: number;
+  comentario: string;
+  fecha: string;
+  cliente: string;
+  barbero: string;
+  barberoId: string;
+  servicios: string[];
+}
+
+export interface ResenasAdmin {
+  resumen: { promedio: number; total: number };
+  items: ResenaAdmin[];
+  hayMas: boolean;
+}
