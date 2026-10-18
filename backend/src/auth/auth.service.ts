@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/auth/auth-user';
+import { AccountsService } from '../common/accounts.service';
 import { loadAuthUser } from '../common/auth/profile';
 import {
   ALLOWED_IMAGE_TYPES,
@@ -23,6 +24,7 @@ import {
 import type {
   AuthProfile,
   DeleteAccountDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   RefreshDto,
@@ -34,7 +36,6 @@ import type {
 } from './auth.types';
 import {
   TERMS_VERSION,
-  buildUsernameBase,
   escapeLike,
   normalizeEmail,
   normalizePhone,
@@ -91,6 +92,8 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
+  constructor(private readonly accounts: AccountsService) {}
+
   // ---------------------------------------------------------------------
   // Registro
   // ---------------------------------------------------------------------
@@ -102,18 +105,18 @@ export class AuthService {
     const telefono = normalizePhone(dto.telefono);
     requireTerms(dto.aceptaTerminos);
 
-    await this.ensureEmailIsFree(email);
+    await this.accounts.ensureEmailIsFree(email);
 
     let userId: string | null = null;
 
     try {
-      userId = await this.createAuthUser(email, password, {
+      userId = await this.accounts.createAuthUser(email, password, {
         nombre,
         rol: 'cliente',
       });
 
-      const usuario = await this.generateUsername(email);
-      await this.insertPerfil(userId, 'cliente');
+      const usuario = await this.accounts.generateUsername(email);
+      await this.accounts.insertPerfil(userId, 'cliente');
 
       const { data, error } = await supabaseAdmin
         .from('cliente')
@@ -174,18 +177,18 @@ export class AuthService {
     requireTerms(dto.aceptaTerminos);
 
     await this.ensureBarberiaNameIsFree(nombreBarberia);
-    await this.ensureEmailIsFree(email);
+    await this.accounts.ensureEmailIsFree(email);
 
     let userId: string | null = null;
     let barberiaId: string | null = null;
 
     try {
-      userId = await this.createAuthUser(email, password, {
+      userId = await this.accounts.createAuthUser(email, password, {
         nombre: nombreAdmin,
         rol: 'admin',
       });
 
-      await this.insertPerfil(userId, 'admin');
+      await this.accounts.insertPerfil(userId, 'admin');
 
       const { data: barberia, error: errBarberia } = await supabaseAdmin
         .from('barberia')
@@ -224,7 +227,7 @@ export class AuthService {
         );
       }
 
-      await this.audit({
+      await this.accounts.audit({
         userId,
         role: 'admin',
         entity: 'barberia',
@@ -391,6 +394,12 @@ export class AuthService {
       );
     }
 
+    // Si era una cuenta con contraseña temporal, elegir una propia cumple el cambio.
+    await supabaseAdmin
+      .from('perfil')
+      .update({ debe_cambiar_contrasena: false })
+      .eq('user_id', data.user.id);
+
     // Cierra todas las sesiones abiertas (incluida la temporal de recuperación):
     // quien tuviera la cuenta abierta con la contraseña vieja debe volver a entrar.
     const { error: errSignOut } = await supabaseAdmin.auth.admin.signOut(
@@ -405,7 +414,7 @@ export class AuthService {
 
     try {
       const user = await loadAuthUser(data.session.access_token, data.user.id);
-      await this.audit({
+      await this.accounts.audit({
         userId: user.userId,
         role: user.role,
         entity: ROLE_CONFIG[user.role].table,
@@ -450,6 +459,16 @@ export class AuthService {
     const idBarberia: string | null = row.id_barberia ?? user.idBarberia;
     const email: string | null = row.email ?? user.email;
 
+    const { data: perfilData } = await supabaseAdmin
+      .from('perfil')
+      .select('debe_cambiar_contrasena, terminos_aceptados_at')
+      .eq('user_id', user.userId)
+      .maybeSingle();
+    const perfil = perfilData as unknown as {
+      debe_cambiar_contrasena?: boolean;
+      terminos_aceptados_at?: string;
+    } | null;
+
     let barberia: AuthProfile['barberia'] = null;
     if (idBarberia) {
       const { data } = await supabaseAdmin
@@ -479,7 +498,112 @@ export class AuthService {
       foto: await getSignedStorageUrl(row.foto_perfil),
       createdAt: row.created_at ?? null,
       idBarberia,
+      debeCambiarContrasena: perfil?.debe_cambiar_contrasena === true,
+      terminosPendientes: !perfil?.terminos_aceptados_at,
       barberia,
+    };
+  }
+
+  /**
+   * Cambia la contraseña conociendo la actual. También es el paso obligatorio
+   * del primer ingreso de una cuenta creada por un administrador: ahí además
+   * se acepta la política de tratamiento de datos.
+   */
+  async changePassword(user: AuthUser, dto: ChangePasswordDto) {
+    const current = requireText(
+      dto.currentPassword,
+      'Ingresa tu contraseña actual',
+      72,
+    );
+    const next = validatePassword(dto.newPassword);
+
+    if (current === next) {
+      throw new BadRequestException(
+        'La nueva contraseña debe ser distinta a la actual',
+      );
+    }
+
+    if (!user.email) {
+      throw new BadRequestException('La cuenta no tiene un correo asociado');
+    }
+
+    const { data: perfilData } = await supabaseAdmin
+      .from('perfil')
+      .select('terminos_aceptados_at')
+      .eq('user_id', user.userId)
+      .maybeSingle();
+    const termsPending = !(
+      perfilData as unknown as { terminos_aceptados_at?: string } | null
+    )?.terminos_aceptados_at;
+
+    if (termsPending) {
+      requireTerms(dto.aceptaTerminos);
+    }
+
+    const { error: errLogin } =
+      await createAnonClient().auth.signInWithPassword({
+        email: user.email,
+        password: current,
+      });
+
+    if (errLogin) {
+      throw new UnauthorizedException('La contraseña actual es incorrecta');
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(
+      user.userId,
+      { password: next },
+    );
+
+    if (error) {
+      throw error.code === 'same_password'
+        ? new BadRequestException(
+            'La nueva contraseña debe ser distinta a la actual',
+          )
+        : new InternalServerErrorException(
+            'No fue posible cambiar la contraseña',
+          );
+    }
+
+    const changes: Record<string, unknown> = { debe_cambiar_contrasena: false };
+    if (termsPending) {
+      changes.terminos_aceptados_at = new Date().toISOString();
+      changes.version_terminos = TERMS_VERSION;
+    }
+
+    const { error: errPerfil } = await supabaseAdmin
+      .from('perfil')
+      .update(changes)
+      .eq('user_id', user.userId);
+
+    if (errPerfil) {
+      throw new InternalServerErrorException(errPerfil.message);
+    }
+
+    // Cierra las demás sesiones (otros dispositivos), pero no esta.
+    const { error: errSignOut } = await supabaseAdmin.auth.admin.signOut(
+      user.accessToken,
+      'others',
+    );
+    if (errSignOut) {
+      this.logger.warn(
+        `No se pudieron cerrar otras sesiones: ${errSignOut.message}`,
+      );
+    }
+
+    await this.accounts.audit({
+      userId: user.userId,
+      role: user.role,
+      entity: ROLE_CONFIG[user.role].table,
+      entityId: user.profileId,
+      action: 'cambiar_contrasena',
+      details: {},
+      idBarberia: user.idBarberia,
+    });
+
+    return {
+      message: 'Contraseña actualizada',
+      profile: await this.me({ ...user, mustChangePassword: false }),
     };
   }
 
@@ -502,7 +626,7 @@ export class AuthService {
     if (dto.email !== undefined) {
       newEmail = normalizeEmail(dto.email);
       if (newEmail !== user.email) {
-        await this.ensureEmailIsFree(newEmail, user.userId);
+        await this.accounts.ensureEmailIsFree(newEmail, user.userId);
       } else {
         newEmail = null;
       }
@@ -520,7 +644,10 @@ export class AuthService {
       );
 
       if (error) {
-        throw this.authError(error, 'No fue posible cambiar el correo');
+        throw this.accounts.authError(
+          error,
+          'No fue posible cambiar el correo',
+        );
       }
 
       if (user.role !== 'admin') {
@@ -545,7 +672,7 @@ export class AuthService {
       }
     }
 
-    await this.audit({
+    await this.accounts.audit({
       userId: user.userId,
       role: user.role,
       entity: config.table,
@@ -656,7 +783,7 @@ export class AuthService {
       await this.anonymizeAccount(user);
     }
 
-    await this.audit({
+    await this.accounts.audit({
       userId: user.userId,
       role: user.role,
       entity: config.table,
@@ -670,7 +797,7 @@ export class AuthService {
     // cascada, y deja user_id en NULL en cliente/barbero.
     const { error } = await supabaseAdmin.auth.admin.deleteUser(user.userId);
     if (error) {
-      throw this.authError(error, 'No fue posible eliminar la cuenta');
+      throw this.accounts.authError(error, 'No fue posible eliminar la cuenta');
     }
 
     await removeStoredFile(photoUrl);
@@ -762,31 +889,6 @@ export class AuthService {
     }
   }
 
-  /** El correo no puede estar en Auth ni en las tablas cliente/barbero. */
-  private async ensureEmailIsFree(email: string, exceptUserId?: string) {
-    for (const table of ['cliente', 'barbero'] as const) {
-      let query = supabaseAdmin
-        .from(table)
-        .select('user_id')
-        .eq('email', email)
-        .limit(1);
-
-      if (exceptUserId) {
-        query = query.neq('user_id', exceptUserId);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw new InternalServerErrorException(error.message);
-      }
-
-      if (data && data.length > 0) {
-        throw new ConflictException('Este email ya está registrado');
-      }
-    }
-  }
-
   private async ensureBarberiaNameIsFree(nombre: string) {
     const { data, error } = await supabaseAdmin
       .from('barberia')
@@ -801,66 +903,6 @@ export class AuthService {
     if (data && data.length > 0) {
       throw new ConflictException('Ya existe una barbería con ese nombre');
     }
-  }
-
-  private async createAuthUser(
-    email: string,
-    password: string,
-    metadata: Record<string, unknown>,
-  ) {
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: metadata,
-    });
-
-    if (error || !data.user) {
-      throw this.authError(error, 'No fue posible crear la cuenta');
-    }
-
-    return data.user.id;
-  }
-
-  private async insertPerfil(userId: string, role: UserRole) {
-    const { error } = await supabaseAdmin.from('perfil').insert({
-      user_id: userId,
-      rol: role,
-      terminos_aceptados_at: new Date().toISOString(),
-      version_terminos: TERMS_VERSION,
-    });
-
-    if (error) {
-      throw new InternalServerErrorException(error.message);
-    }
-  }
-
-  private async generateUsername(email: string) {
-    const base = buildUsernameBase(email);
-    let candidate = base;
-
-    for (let attempt = 1; attempt <= 50; attempt += 1) {
-      const [{ data: clientes }, { data: barberos }] = await Promise.all([
-        supabaseAdmin
-          .from('cliente')
-          .select('id_cliente')
-          .eq('usuario', candidate)
-          .limit(1),
-        supabaseAdmin
-          .from('barbero')
-          .select('id_barbero')
-          .eq('usuario', candidate)
-          .limit(1),
-      ]);
-
-      if (!clientes?.length && !barberos?.length) {
-        return candidate;
-      }
-
-      candidate = `${base.slice(0, 48)}_${attempt}`;
-    }
-
-    return `${base.slice(0, 40)}_${Date.now().toString(36)}`;
   }
 
   /** Deshace un registro a medias para no dejar cuentas huérfanas. */
@@ -880,48 +922,6 @@ export class AuthService {
       this.logger.error(
         `No se pudo limpiar el registro fallido de ${userId}: ${String(error)}`,
       );
-    }
-  }
-
-  private authError(
-    error: { message?: string; code?: string; status?: number } | null,
-    fallback: string,
-  ) {
-    const message = error?.message ?? '';
-
-    if (
-      error?.code === 'email_exists' ||
-      error?.code === 'user_already_exists' ||
-      /already|registered|exists/i.test(message)
-    ) {
-      return new ConflictException('Este email ya está registrado');
-    }
-
-    return new InternalServerErrorException(message || fallback);
-  }
-
-  /** RNF-08: deja rastro de acciones críticas. Nunca interrumpe la operación. */
-  private async audit(entry: {
-    userId: string;
-    role: UserRole;
-    entity: string;
-    entityId: string;
-    action: string;
-    details: Record<string, unknown>;
-    idBarberia: string | null;
-  }) {
-    const { error } = await supabaseAdmin.from('auditoria_accion').insert({
-      user_id: entry.userId,
-      rol: entry.role,
-      entidad: entry.entity,
-      entidad_id: entry.entityId,
-      accion: entry.action,
-      detalles: entry.details,
-      id_barberia: entry.idBarberia,
-    });
-
-    if (error) {
-      this.logger.warn(`No se pudo registrar la auditoría: ${error.message}`);
     }
   }
 }

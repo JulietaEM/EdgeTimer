@@ -12,13 +12,18 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import type { AuthUser } from '../common/auth/auth-user';
-import { CurrentUser, Public } from '../common/auth/decorators';
+import {
+  AllowPendingPasswordChange,
+  CurrentUser,
+  Public,
+} from '../common/auth/decorators';
 import {
   MAX_IMAGE_BYTES,
   type UploadedFile as PhotoFile,
 } from '../common/storage';
 import { AuthService } from './auth.service';
 import type {
+  ChangePasswordDto,
   DeleteAccountDto,
   ForgotPasswordDto,
   LoginDto,
@@ -74,14 +79,26 @@ export class AuthController {
   }
 
   @Post('logout')
+  @AllowPendingPasswordChange()
   @HttpCode(200)
   logout(@CurrentUser() user: AuthUser) {
     return this.authService.logout(user);
   }
 
   @Get('me')
+  @AllowPendingPasswordChange()
   me(@CurrentUser() user: AuthUser) {
     return this.authService.me(user);
+  }
+
+  @Post('me/password')
+  @AllowPendingPasswordChange()
+  @HttpCode(200)
+  changePassword(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user, dto);
   }
 
   @Patch('me')

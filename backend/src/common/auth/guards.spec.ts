@@ -5,7 +5,11 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { AuthUser } from './auth-user';
-import { IS_PUBLIC_KEY, ROLES_KEY } from './decorators';
+import {
+  ALLOW_PENDING_PASSWORD_KEY,
+  IS_PUBLIC_KEY,
+  ROLES_KEY,
+} from './decorators';
 import { RolesGuard } from './roles.guard';
 
 // El guard JWT importa supabase.ts, que exige variables de entorno.
@@ -41,6 +45,7 @@ const barbero: AuthUser = {
   nombre: 'Carlos',
   email: 'carlos@correo.com',
   accessToken: 't',
+  mustChangePassword: false,
 };
 
 describe('extractBearerToken', () => {
@@ -94,6 +99,42 @@ describe('JwtAuthGuard', () => {
     await expect(guard.canActivate(contextWith(request))).resolves.toBe(true);
     expect(request.user).toEqual(barbero);
     expect(profile.loadAuthUser).toHaveBeenCalledWith('bueno', 'u1');
+  });
+
+  it('con contraseña temporal sin cambiar bloquea las rutas normales (403)', async () => {
+    jest.spyOn(supabaseAdmin.auth, 'getUser').mockResolvedValue({
+      data: { user: { id: 'u1' } },
+      error: null,
+    } as never);
+    jest
+      .spyOn(profile, 'loadAuthUser')
+      .mockResolvedValue({ ...barbero, mustChangePassword: true });
+    const guard = new JwtAuthGuard(reflectorReturning({}));
+
+    await expect(
+      guard.canActivate(
+        contextWith({ headers: { authorization: 'Bearer bueno' } }),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('con contraseña temporal permite las rutas marcadas para cambiarla', async () => {
+    jest.spyOn(supabaseAdmin.auth, 'getUser').mockResolvedValue({
+      data: { user: { id: 'u1' } },
+      error: null,
+    } as never);
+    jest
+      .spyOn(profile, 'loadAuthUser')
+      .mockResolvedValue({ ...barbero, mustChangePassword: true });
+    const guard = new JwtAuthGuard(
+      reflectorReturning({ [ALLOW_PENDING_PASSWORD_KEY]: true }),
+    );
+
+    await expect(
+      guard.canActivate(
+        contextWith({ headers: { authorization: 'Bearer bueno' } }),
+      ),
+    ).resolves.toBe(true);
   });
 
   it('rechaza con 401 si falta el token en una ruta protegida', async () => {

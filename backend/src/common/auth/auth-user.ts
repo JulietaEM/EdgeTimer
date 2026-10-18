@@ -11,6 +11,8 @@ export interface AuthUser {
   nombre: string;
   email: string | null;
   accessToken: string;
+  /** Contraseña temporal sin cambiar: solo puede usar las rutas de cambio de contraseña. */
+  mustChangePassword: boolean;
 }
 
 export type RequestWithUser = Request & { user?: AuthUser };

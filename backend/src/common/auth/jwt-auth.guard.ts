@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
   type CanActivate,
@@ -7,7 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { supabaseAdmin } from '../../supabase';
 import type { RequestWithUser } from './auth-user';
-import { IS_PUBLIC_KEY } from './decorators';
+import { ALLOW_PENDING_PASSWORD_KEY, IS_PUBLIC_KEY } from './decorators';
 import { loadAuthUser } from './profile';
 
 export function extractBearerToken(header?: string) {
@@ -46,7 +47,24 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('La sesión no es válida o expiró');
     }
 
-    request.user = await loadAuthUser(token, data.user.id);
+    const user = await loadAuthUser(token, data.user.id);
+    request.user = user;
+
+    // Cuenta con contraseña temporal: solo puede cambiarla (o ver su perfil y salir).
+    if (user.mustChangePassword) {
+      const allowed = this.reflector.getAllAndOverride<boolean>(
+        ALLOW_PENDING_PASSWORD_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+
+      if (!allowed) {
+        throw new ForbiddenException({
+          message: 'Debes cambiar tu contraseña temporal antes de continuar',
+          code: 'PASSWORD_CHANGE_REQUIRED',
+        });
+      }
+    }
+
     return true;
   }
 }
