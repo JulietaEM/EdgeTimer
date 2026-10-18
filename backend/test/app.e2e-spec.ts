@@ -43,6 +43,12 @@ describe('API (e2e, sin base de datos)', () => {
     ['PATCH', '/auth/me'],
     ['DELETE', '/auth/me'],
     ['POST', '/auth/logout'],
+    ['POST', '/auth/me/password'],
+    ['GET', '/admin/barberos'],
+    ['POST', '/admin/barberos'],
+    ['PATCH', '/admin/barberos/123'],
+    ['DELETE', '/admin/barberos/123'],
+    ['GET', '/admin/procedimientos'],
   ])('%s %s exige token (401)', (method, path) => {
     return request(app.getHttpServer())
       [method.toLowerCase() as 'get'](path)

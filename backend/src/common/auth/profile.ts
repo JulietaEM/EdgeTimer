@@ -1,6 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
 import type { UserRole } from '../../auth/auth.types';
-import { createSupabaseUserClient } from '../../supabase';
+import { createSupabaseUserClient, supabaseAdmin } from '../../supabase';
 import type { AuthUser } from './auth-user';
 
 interface RpcProfile {
@@ -30,6 +30,12 @@ export async function loadAuthUser(
 
   const profile = data as RpcProfile;
 
+  const { data: perfil } = await supabaseAdmin
+    .from('perfil')
+    .select('debe_cambiar_contrasena')
+    .eq('user_id', userId)
+    .maybeSingle();
+
   return {
     userId,
     role: profile.role,
@@ -38,5 +44,8 @@ export async function loadAuthUser(
     nombre: profile.nombre,
     email: profile.email ?? null,
     accessToken,
+    mustChangePassword:
+      (perfil as { debe_cambiar_contrasena?: boolean } | null)
+        ?.debe_cambiar_contrasena === true,
   };
 }

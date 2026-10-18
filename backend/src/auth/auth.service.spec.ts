@@ -8,6 +8,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 // (Lleva "/" al final a propósito: el servicio debe quitarla.)
 process.env.FRONTEND_URL = 'https://app.ejemplo.com/';
 
+import { AccountsService } from '../common/accounts.service';
 import * as supabase from '../supabase';
 import { AuthService } from './auth.service';
 
@@ -26,7 +27,7 @@ describe('AuthService · recuperar contraseña', () => {
   let service: AuthService;
 
   beforeEach(() => {
-    service = new AuthService();
+    service = new AuthService(new AccountsService());
   });
 
   afterEach(() => {

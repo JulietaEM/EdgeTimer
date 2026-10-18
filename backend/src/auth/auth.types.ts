@@ -51,6 +51,13 @@ export interface UpdateProfileDto {
   email?: string;
 }
 
+export interface ChangePasswordDto {
+  currentPassword: string;
+  newPassword: string;
+  /** Obligatorio la primera vez en cuentas creadas por un administrador. */
+  aceptaTerminos?: boolean;
+}
+
 export interface DeleteAccountDto {
   password: string;
 }
@@ -65,6 +72,10 @@ export interface AuthProfile {
   foto: string | null;
   createdAt: string | null;
   idBarberia: string | null;
+  /** Cuenta creada por un administrador: debe elegir su propia contraseña. */
+  debeCambiarContrasena: boolean;
+  /** Aún no ha aceptado la política de tratamiento de datos. */
+  terminosPendientes: boolean;
   barberia: {
     id: string;
     nombre: string;
