@@ -6,11 +6,18 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/auth/auth-user';
 import { CurrentUser, Roles } from '../common/auth/decorators';
 import { AdminService } from './admin.service';
-import type { CreateBarberoDto, UpdateBarberoDto } from './admin.types';
+import type {
+  CreateBarberoDto,
+  CreateProcedimientoDto,
+  ResenaQuery,
+  UpdateBarberoDto,
+  UpdateProcedimientoDto,
+} from './admin.types';
 
 /** Todo lo de este controlador es solo para administradores y de su propia barbería. */
 @Controller('admin')
@@ -45,5 +52,27 @@ export class AdminController {
   @Get('procedimientos')
   listProcedimientos(@CurrentUser() user: AuthUser) {
     return this.adminService.listProcedimientos(user);
+  }
+
+  @Post('procedimientos')
+  createProcedimiento(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateProcedimientoDto,
+  ) {
+    return this.adminService.createProcedimiento(user, dto);
+  }
+
+  @Patch('procedimientos/:id')
+  updateProcedimiento(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateProcedimientoDto,
+  ) {
+    return this.adminService.updateProcedimiento(user, id, dto);
+  }
+
+  @Get('resenas')
+  listResenas(@CurrentUser() user: AuthUser, @Query() query: ResenaQuery) {
+    return this.adminService.listResenas(user, query);
   }
 }

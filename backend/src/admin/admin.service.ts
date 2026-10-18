@@ -8,8 +8,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  escapeLike,
   normalizeEmail,
   normalizePhone,
+  optionalText,
   requireText,
   validatePassword,
 } from '../auth/auth.validation';
@@ -17,12 +19,23 @@ import { AccountsService } from '../common/accounts.service';
 import type { AuthUser } from '../common/auth/auth-user';
 import { removeStoredFile } from '../common/storage';
 import { getSignedStorageUrl, supabaseAdmin } from '../supabase';
-import { diffIds, normalizeIds } from './admin.utils';
+import {
+  diffIds,
+  isUuid,
+  normalizeIds,
+  parseDuration,
+  parsePage,
+  parsePrice,
+} from './admin.utils';
 import type {
   BarberoView,
   CreateBarberoDto,
+  CreateProcedimientoDto,
   ProcedimientoView,
+  ResenaQuery,
+  ResenasResponse,
   UpdateBarberoDto,
+  UpdateProcedimientoDto,
 } from './admin.types';
 
 const BARBERO_SELECT = `
@@ -55,6 +68,26 @@ interface BarberoRow {
     id_procedimiento: string;
     procedimiento: { id_procedimiento: string; nombre: string } | null;
   }[];
+}
+
+type One<T> = T | T[] | null | undefined;
+
+/** PostgREST devuelve una relación como objeto o como lista de un elemento. */
+function first<T>(value: One<T>): T | undefined {
+  return Array.isArray(value) ? value[0] : (value ?? undefined);
+}
+
+interface ResenaRow {
+  id_calificacion: string;
+  puntuacion_numerica: number | string;
+  resena: string | null;
+  created_at: string;
+  cita: One<{
+    id_barbero: string;
+    cliente: One<{ nombre_cliente: string }>;
+    barbero: One<{ nombre_barbero: string }>;
+    cita_procedimiento?: { procedimiento: One<{ nombre: string }> }[];
+  }>;
 }
 
 @Injectable()
@@ -351,7 +384,7 @@ export class AdminService {
   }
 
   // ---------------------------------------------------------------------
-  // Procedimientos (solo lectura por ahora; el CRUD llega en el siguiente tramo)
+  // Procedimientos (RF-11)
   // ---------------------------------------------------------------------
 
   async listProcedimientos(user: AuthUser): Promise<ProcedimientoView[]> {
@@ -379,6 +412,217 @@ export class AdminService {
         activo: item.activo === true,
       }),
     );
+  }
+
+  async createProcedimiento(user: AuthUser, dto: CreateProcedimientoDto) {
+    const idBarberia = await this.barberiaIdOf(user);
+
+    const nombre = requireText(dto.nombre, 'El nombre es obligatorio', 80);
+    const descripcion = optionalText(dto.descripcion, 300);
+    const precio = parsePrice(dto.precio);
+    const duracion = parseDuration(dto.duracionMinutos);
+
+    await this.assertProcedimientoNameIsFree(nombre, idBarberia);
+
+    const { data, error } = await supabaseAdmin
+      .from('procedimiento')
+      .insert({
+        id_barberia: idBarberia,
+        nombre,
+        descripcion,
+        precio,
+        duracion_minutos: duracion,
+        activo: true,
+      })
+      .select(
+        'id_procedimiento, nombre, descripcion, precio, duracion_minutos, activo',
+      )
+      .single();
+
+    if (error || !data) {
+      throw new InternalServerErrorException(
+        error?.message || 'No fue posible crear el procedimiento',
+      );
+    }
+
+    const view = this.toProcedimientoView(data);
+
+    await this.accounts.audit({
+      userId: user.userId,
+      role: 'admin',
+      entity: 'procedimiento',
+      entityId: view.id,
+      action: 'crear_procedimiento',
+      details: { nombre, precio, duracion },
+      idBarberia,
+    });
+
+    return { message: 'Procedimiento creado', procedimiento: view };
+  }
+
+  /**
+   * Edita un procedimiento. Los cambios de precio y duración no alteran las
+   * citas ya agendadas: guardan el valor con el que se agendaron.
+   */
+  async updateProcedimiento(
+    user: AuthUser,
+    id: string,
+    dto: UpdateProcedimientoDto,
+  ) {
+    const idBarberia = await this.barberiaIdOf(user);
+    await this.findOwnedProcedimiento(id, idBarberia);
+
+    const changes: Record<string, unknown> = {};
+
+    if (dto.nombre !== undefined) {
+      changes.nombre = requireText(dto.nombre, 'El nombre es obligatorio', 80);
+      await this.assertProcedimientoNameIsFree(
+        changes.nombre as string,
+        idBarberia,
+        id,
+      );
+    }
+    if (dto.descripcion !== undefined) {
+      changes.descripcion = optionalText(dto.descripcion, 300);
+    }
+    if (dto.precio !== undefined) {
+      changes.precio = parsePrice(dto.precio);
+    }
+    if (dto.duracionMinutos !== undefined) {
+      changes.duracion_minutos = parseDuration(dto.duracionMinutos);
+    }
+    if (dto.activo !== undefined) {
+      if (typeof dto.activo !== 'boolean') {
+        throw new BadRequestException('El estado no es válido');
+      }
+      changes.activo = dto.activo;
+    }
+
+    if (Object.keys(changes).length === 0) {
+      throw new BadRequestException('No hay cambios para guardar');
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('procedimiento')
+      .update(changes)
+      .eq('id_procedimiento', id)
+      .eq('id_barberia', idBarberia)
+      .select(
+        'id_procedimiento, nombre, descripcion, precio, duracion_minutos, activo',
+      )
+      .single();
+
+    if (error || !data) {
+      throw new InternalServerErrorException(
+        error?.message || 'No fue posible actualizar el procedimiento',
+      );
+    }
+
+    await this.accounts.audit({
+      userId: user.userId,
+      role: 'admin',
+      entity: 'procedimiento',
+      entityId: id,
+      action: 'editar_procedimiento',
+      details: { campos: Object.keys(changes) },
+      idBarberia,
+    });
+
+    return {
+      message:
+        changes.activo === true
+          ? 'Procedimiento activado'
+          : changes.activo === false
+            ? 'Procedimiento desactivado'
+            : 'Procedimiento actualizado',
+      procedimiento: this.toProcedimientoView(data),
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Reseñas (RF-10)
+  // ---------------------------------------------------------------------
+
+  async listResenas(
+    user: AuthUser,
+    query: ResenaQuery,
+  ): Promise<ResenasResponse> {
+    const idBarberia = await this.barberiaIdOf(user);
+    const { offset, limit } = parsePage(query.offset, query.limit);
+
+    if (query.barberoId !== undefined && !isUuid(query.barberoId)) {
+      throw new BadRequestException('El barbero no es válido');
+    }
+
+    // Se pide una más de las necesarias para saber si hay otra página.
+    let page = supabaseAdmin
+      .from('calificacion')
+      .select(
+        `
+          id_calificacion,
+          puntuacion_numerica,
+          resena,
+          created_at,
+          cita!inner(
+            id_barbero,
+            id_barberia,
+            cliente:cliente(nombre_cliente),
+            barbero:barbero(nombre_barbero),
+            cita_procedimiento(procedimiento:procedimiento(nombre))
+          )
+        `,
+      )
+      .eq('cita.id_barberia', idBarberia)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit);
+
+    let scores = supabaseAdmin
+      .from('calificacion')
+      .select('puntuacion_numerica, cita!inner(id_barberia, id_barbero)')
+      .eq('cita.id_barberia', idBarberia)
+      .limit(10000);
+
+    if (query.barberoId) {
+      page = page.eq('cita.id_barbero', query.barberoId);
+      scores = scores.eq('cita.id_barbero', query.barberoId);
+    }
+
+    const [pageRes, scoresRes] = await Promise.all([page, scores]);
+
+    if (pageRes.error) {
+      throw new InternalServerErrorException(pageRes.error.message);
+    }
+    if (scoresRes.error) {
+      throw new InternalServerErrorException(scoresRes.error.message);
+    }
+
+    const rows = (pageRes.data ?? []) as unknown as ResenaRow[];
+    const values = (
+      (scoresRes.data ?? []) as unknown as { puntuacion_numerica: number }[]
+    ).map((row) => Number(row.puntuacion_numerica));
+    const total = values.length;
+    const promedio = total ? values.reduce((sum, v) => sum + v, 0) / total : 0;
+
+    return {
+      resumen: { promedio: Math.round(promedio * 10) / 10, total },
+      items: rows.slice(0, limit).map((row) => {
+        const cita = first(row.cita);
+
+        return {
+          id: row.id_calificacion,
+          puntuacion: Number(row.puntuacion_numerica),
+          comentario: row.resena ?? '',
+          fecha: row.created_at,
+          cliente: first(cita?.cliente)?.nombre_cliente ?? 'Cliente',
+          barbero: first(cita?.barbero)?.nombre_barbero ?? 'Barbero',
+          barberoId: cita?.id_barbero ?? '',
+          servicios: (cita?.cita_procedimiento ?? [])
+            .map((item) => first(item.procedimiento)?.nombre)
+            .filter((nombre): nombre is string => !!nombre),
+        };
+      }),
+      hayMas: rows.length > limit,
+    };
   }
 
   // ---------------------------------------------------------------------
@@ -494,6 +738,64 @@ export class AdminService {
       procedimientoIds: especialidades.map((item) => item.id),
       especialidades,
     };
+  }
+
+  private toProcedimientoView(
+    item: Record<string, unknown>,
+  ): ProcedimientoView {
+    return {
+      id: item.id_procedimiento as string,
+      nombre: item.nombre as string,
+      descripcion: (item.descripcion as string | null) ?? '',
+      precio: Number(item.precio ?? 0),
+      duracionMinutos: item.duracion_minutos as number,
+      activo: item.activo === true,
+    };
+  }
+
+  private async findOwnedProcedimiento(id: string, idBarberia: string) {
+    const { data, error } = await supabaseAdmin
+      .from('procedimiento')
+      .select('id_procedimiento')
+      .eq('id_procedimiento', id)
+      .eq('id_barberia', idBarberia)
+      .maybeSingle();
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    if (!data) {
+      throw new NotFoundException('No se encontró el procedimiento');
+    }
+  }
+
+  /** No puede haber dos procedimientos con el mismo nombre en una barbería. */
+  private async assertProcedimientoNameIsFree(
+    nombre: string,
+    idBarberia: string,
+    exceptId?: string,
+  ) {
+    let query = supabaseAdmin
+      .from('procedimiento')
+      .select('id_procedimiento')
+      .eq('id_barberia', idBarberia)
+      .ilike('nombre', escapeLike(nombre))
+      .limit(1);
+
+    if (exceptId) {
+      query = query.neq('id_procedimiento', exceptId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    if (data && data.length > 0) {
+      throw new ConflictException('Ya tienes un procedimiento con ese nombre');
+    }
   }
 
   /** Todos los procedimientos deben existir, estar activos y ser de la barbería. */
