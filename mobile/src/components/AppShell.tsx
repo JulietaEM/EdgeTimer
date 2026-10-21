@@ -67,6 +67,17 @@ export function AppShell({
           }}
         />
       ) : null}
+      {role === 'barbero' ? (
+        <MenuButton
+          active={activeScreen === 'disponibilidad'}
+          icon={calendarIcon}
+          label="Disponibilidad"
+          onPress={() => {
+            onNavigate('disponibilidad');
+            setMenuOpen(false);
+          }}
+        />
+      ) : null}
       <MenuButton
         active={activeScreen === 'perfil'}
         icon={userIcon}

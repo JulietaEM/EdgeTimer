@@ -5,6 +5,7 @@ import { AdminModule } from './admin/admin.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { BarberoModule } from './barbero/barbero.module';
 import { CatalogosModule } from './catalogos/catalogos.module';
 import { CitasModule } from './citas/citas.module';
 import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
@@ -15,6 +16,7 @@ import { RolesGuard } from './common/auth/roles.guard';
     ConfigModule.forRoot({ isGlobal: true }),
     AuthModule,
     AdminModule,
+    BarberoModule,
     CatalogosModule,
     CitasModule,
   ],
