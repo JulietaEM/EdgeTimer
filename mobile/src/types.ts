@@ -5,7 +5,7 @@ export type AuthScreen =
   | 'registerBarberia'
   | 'forgotPassword'
   | 'resetPassword';
-export type AppScreen = 'home' | 'agenda' | 'perfil';
+export type AppScreen = 'home' | 'agenda' | 'disponibilidad' | 'perfil';
 export type Screen = AuthScreen | AppScreen;
 
 export interface BarberiaResumen {
@@ -135,5 +135,42 @@ export interface ResenaAdmin {
 export interface ResenasAdmin {
   resumen: { promedio: number; total: number };
   items: ResenaAdmin[];
+  hayMas: boolean;
+}
+
+export interface BloqueDisponibilidad {
+  /** 1 = lunes ... 7 = domingo. */
+  dia: number;
+  inicio: string;
+  fin: string;
+}
+
+export interface ResumenBarbero {
+  solicitudesPendientes: number;
+  citasHoy: number;
+  tieneDisponibilidad: boolean;
+}
+
+export interface CitaBarbero {
+  id: string;
+  cliente: { id: string; nombre: string; telefono: string | null; foto: string | null };
+  procedimientos: { nombre: string; precio: number; duracionMinutos: number }[];
+  costoTotal: number;
+  duracionTotal: number;
+  inicioAt: string;
+  finAt: string;
+  fecha: string;
+  horaInicio: string;
+  horaFin: string;
+  estado: 'pendiente' | 'confirmada' | 'realizada' | 'cancelada' | 'rechazada';
+  estadoLabel: string;
+  notas: string;
+  motivo: string;
+  puedeModificar: boolean;
+  calificacion: { puntuacion: number; resena: string } | null;
+}
+
+export interface CitasBarbero {
+  items: CitaBarbero[];
   hayMas: boolean;
 }

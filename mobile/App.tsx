@@ -14,6 +14,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AppShell } from './src/components/AppShell';
 import api, {
+  API_URL,
   getAccessToken,
   restoreSession,
   setSession,
@@ -21,6 +22,9 @@ import api, {
 } from './src/api';
 import { AdminHomeScreen } from './src/screens/AdminHome';
 import { AgendaScreen } from './src/screens/Agenda';
+import { BarberoAgendaScreen } from './src/screens/barbero/BarberoAgenda';
+import { BarberoDisponibilidadScreen } from './src/screens/barbero/BarberoDisponibilidad';
+import { BarberoHomeScreen } from './src/screens/barbero/BarberoHome';
 import { ChangePasswordScreen } from './src/screens/ChangePassword';
 import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
 import { HomeScreen } from './src/screens/Home';
@@ -148,9 +152,16 @@ function AppContent() {
     );
   }
 
-  if (screen === 'home' || screen === 'agenda' || screen === 'perfil') {
-    const appScreen = screen as AppScreen;
+  if (
+    screen === 'home' ||
+    screen === 'agenda' ||
+    screen === 'disponibilidad' ||
+    screen === 'perfil'
+  ) {
     const activeRole = profile?.role ?? role;
+    // La pantalla de disponibilidad solo existe para barberos.
+    const appScreen: AppScreen =
+      screen === 'disponibilidad' && activeRole !== 'barbero' ? 'home' : (screen as AppScreen);
 
     return (
       <AppShell
@@ -167,6 +178,8 @@ function AppContent() {
         {appScreen === 'home' ? (
           activeRole === 'admin' ? (
             <AdminHomeScreen profile={profile} />
+          ) : activeRole === 'barbero' ? (
+            <BarberoHomeScreen profile={profile} onNavigate={setScreen} />
           ) : (
             <HomeScreen
               profile={profile}
@@ -178,7 +191,13 @@ function AppContent() {
             />
           )
         ) : appScreen === 'agenda' ? (
-          <AgendaScreen profile={profile} role={activeRole} />
+          activeRole === 'barbero' ? (
+            <BarberoAgendaScreen />
+          ) : (
+            <AgendaScreen profile={profile} role={activeRole} />
+          )
+        ) : appScreen === 'disponibilidad' ? (
+          <BarberoDisponibilidadScreen />
         ) : (
           <PerfilScreen
             profile={profile}
@@ -272,6 +291,8 @@ function AuthLayout({ title, children }: { title: string; children: ReactNode })
         >
           <Image source={logo} style={styles.logo} />
           <Text style={styles.title}>{title}</Text>
+          {/* Solo en desarrollo: muestra a qué backend está hablando la app. */}
+          {__DEV__ ? <Text style={styles.devServer}>Servidor: {API_URL}</Text> : null}
           {children}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -304,6 +325,13 @@ const styles = StyleSheet.create({
     height: 118,
     borderRadius: 28,
     marginBottom: 22,
+  },
+  devServer: {
+    color: colors.muted,
+    fontFamily: fonts.medium,
+    fontSize: 14,
+    marginBottom: 16,
+    marginTop: -16,
   },
   title: {
     color: colors.black,
