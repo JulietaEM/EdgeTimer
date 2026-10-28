@@ -60,6 +60,9 @@ describe('API (e2e, sin base de datos)', () => {
     ['PATCH', '/barbero/citas/123/rechazar'],
     ['PATCH', '/barbero/citas/123/cancelar'],
     ['PATCH', '/barbero/citas/123/reprogramar'],
+    ['GET', '/cliente/barberias'],
+    ['GET', '/cliente/barberias/123/barberos'],
+    ['GET', '/cliente/barberos/123'],
   ])('%s %s exige token (401)', (method, path) => {
     return request(app.getHttpServer())
       [method.toLowerCase() as 'get'](path)
