@@ -14,7 +14,7 @@ import api, { postForm } from '../api';
 import { FormModal } from '../components/FormModal';
 import { LabeledInput } from '../components/LabeledInput';
 import { colors, fonts } from '../theme';
-import type { Barbero, Role, SessionProfile } from '../types';
+import type { BarberoPerfilCliente, Role, SessionProfile } from '../types';
 import { readError } from '../utils/errors';
 
 const avatar = require('../../assets/user.png');
@@ -36,7 +36,7 @@ export function PerfilScreen({
 }) {
   const { width } = useWindowDimensions();
   const isCompact = width < 620;
-  const [barbero, setBarbero] = useState<Barbero | null>(null);
+  const [barbero, setBarbero] = useState<BarberoPerfilCliente | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [toast, setToast] = useState('');
@@ -49,10 +49,10 @@ export function PerfilScreen({
     setLoading(true);
     setBarbero(null); // Reset antes de cargar
     try {
-      const res = await api.get(`/catalogos/barberos/${barberoId}`);
+      const res = await api.get<BarberoPerfilCliente>(`/cliente/barberos/${barberoId}`);
       setBarbero(res.data);
     } catch (error: any) {
-      setToast(error?.response?.data?.message || 'No fue posible cargar el perfil del barbero.');
+      setToast(readError(error, 'No fue posible cargar el perfil del barbero.'));
       setBarbero(null);
     } finally {
       setLoading(false);
@@ -214,22 +214,42 @@ export function PerfilScreen({
   );
 }
 
-function BarberPerfilContent({ barbero, isCompact }: { barbero: Barbero; isCompact: boolean }) {
+function BarberPerfilContent({
+  barbero,
+  isCompact,
+}: {
+  barbero: BarberoPerfilCliente;
+  isCompact: boolean;
+}) {
   return (
     <View>
       <View style={[styles.profileCard, isCompact && styles.fullWidthCard]}>
         <Avatar source={barbero.foto} size={120} />
         <Text style={styles.name}>{barbero.nombre}</Text>
-        <Text style={styles.rating}>★ {barbero.promedioCalificacion.toFixed(1)}</Text>
+        <Text style={styles.rating}>
+          {barbero.totalResenas > 0
+            ? `★ ${barbero.promedioCalificacion.toFixed(1)} (${barbero.totalResenas} ${barbero.totalResenas === 1 ? 'reseña' : 'reseñas'})`
+            : 'Sin calificaciones todavía'}
+        </Text>
       </View>
 
       <SectionTitle title="Información" />
-      <InfoBox label="Horario Laboral" value={barbero.horarioLaboral} />
+      <InfoBox label="Barbería" value={barbero.barberia.nombre} />
+      {barbero.barberia.direccion ? (
+        <InfoBox label="Dirección" value={barbero.barberia.direccion} />
+      ) : null}
+      <InfoBox
+        label="Horario de atención"
+        value={barbero.tieneHorario ? barbero.horarioResumen : 'Aún no ha definido su horario'}
+      />
 
       <SectionTitle title="Especialidades" />
       <View style={styles.grid}>
         {barbero.especialidades.length === 0 ? (
-          <Text style={styles.empty}>Sin especialidades registradas.</Text>
+          <Text style={styles.empty}>
+            Sin especialidades asignadas: puedes elegir cualquiera de los procedimientos de la
+            barbería.
+          </Text>
         ) : (
           barbero.especialidades.map((service) => (
             <View key={service.id} style={[styles.serviceCard, isCompact && styles.fullWidthCard]}>
@@ -241,6 +261,21 @@ function BarberPerfilContent({ barbero, isCompact }: { barbero: Barbero; isCompa
           ))
         )}
       </View>
+
+      <SectionTitle title="Reseñas" />
+      {barbero.resenas.length === 0 ? (
+        <Text style={styles.empty}>Aún no tiene reseñas.</Text>
+      ) : (
+        barbero.resenas.map((resena) => (
+          <View key={resena.id} style={styles.infoBox}>
+            <Text style={styles.infoLabel}>
+              {resena.cliente} · {resena.fecha}
+            </Text>
+            <Text style={styles.infoValue}>{'★'.repeat(resena.puntuacion)}</Text>
+            {resena.comentario ? <Text style={styles.cardText}>{resena.comentario}</Text> : null}
+          </View>
+        ))
+      )}
     </View>
   );
 }

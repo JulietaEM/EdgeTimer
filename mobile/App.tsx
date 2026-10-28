@@ -27,7 +27,7 @@ import { BarberoDisponibilidadScreen } from './src/screens/barbero/BarberoDispon
 import { BarberoHomeScreen } from './src/screens/barbero/BarberoHome';
 import { ChangePasswordScreen } from './src/screens/ChangePassword';
 import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
-import { HomeScreen } from './src/screens/Home';
+import { ClienteInicioScreen } from './src/screens/cliente/ClienteInicio';
 import { LoginScreen } from './src/screens/Login';
 import { PerfilScreen } from './src/screens/Perfil';
 import { RegisterScreen } from './src/screens/Register';
@@ -181,9 +181,8 @@ function AppContent() {
           ) : activeRole === 'barbero' ? (
             <BarberoHomeScreen profile={profile} onNavigate={setScreen} />
           ) : (
-            <HomeScreen
+            <ClienteInicioScreen
               profile={profile}
-              role={activeRole}
               onViewBarbero={(id) => {
                 setBarberoId(id);
                 setScreen('perfil');

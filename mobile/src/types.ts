@@ -174,3 +174,60 @@ export interface CitasBarbero {
   items: CitaBarbero[];
   hayMas: boolean;
 }
+
+// ---- Cliente: elegir barbería y barbero (HU-17) ----
+
+export interface BarberiaCliente {
+  id: string;
+  nombre: string;
+  descripcion: string;
+  direccion: string;
+  telefono: string | null;
+  logo: string | null;
+  totalBarberos: number;
+}
+
+export interface BarberoListaCliente {
+  id: string;
+  nombre: string;
+  foto: string | null;
+  promedioCalificacion: number;
+  especialidades: string[];
+  tieneHorario: boolean;
+  horarioResumen: string;
+}
+
+export interface EspecialidadCliente {
+  id: string;
+  nombre: string;
+  descripcion: string;
+  precio: number;
+  duracionMinutos: number;
+}
+
+export interface ResenaPublica {
+  id: string;
+  puntuacion: number;
+  comentario: string;
+  fecha: string;
+  cliente: string;
+}
+
+export interface BarberoPerfilCliente {
+  id: string;
+  nombre: string;
+  foto: string | null;
+  promedioCalificacion: number;
+  totalResenas: number;
+  barberia: {
+    id: string;
+    nombre: string;
+    direccion: string;
+    telefono: string | null;
+    logo: string | null;
+  };
+  tieneHorario: boolean;
+  horarioResumen: string;
+  especialidades: EspecialidadCliente[];
+  resenas: ResenaPublica[];
+}
