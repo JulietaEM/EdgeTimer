@@ -12,6 +12,7 @@ import type {
   BarberoListItem,
   BarberoPerfilView,
   EspecialidadView,
+  ProcedimientosBarberoView,
 } from './cliente.types';
 import {
   firstName,
@@ -48,6 +49,11 @@ interface BarberoRow {
   foto_perfil: string | null;
   promedio_calificacion: number | string | null;
   barbero_procedimiento?: { procedimiento: One<ProcedimientoRow> }[];
+}
+
+interface ProcedimientosRow extends Pick<BarberoRow, 'barbero_procedimiento'> {
+  id_barberia: string;
+  barberia: One<{ activo: boolean }>;
 }
 
 interface PerfilRow extends BarberoRow {
@@ -258,22 +264,91 @@ export class ClienteService {
   }
 
   // ---------------------------------------------------------------------
+  // HU-18: elegir uno o varios procedimientos
+  // ---------------------------------------------------------------------
+
+  async listProcedimientos(
+    barberoId: string,
+  ): Promise<ProcedimientosBarberoView> {
+    if (!isUuid(barberoId)) {
+      throw new NotFoundException('No se encontró el barbero');
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('barbero')
+      .select(
+        `
+          id_barberia,
+          barberia:barberia(activo),
+          barbero_procedimiento(
+            procedimiento:procedimiento(id_procedimiento, nombre, descripcion, precio, duracion_minutos, activo)
+          )
+        `,
+      )
+      .eq('id_barbero', barberoId)
+      .eq('activo', true)
+      .maybeSingle();
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    const row = data as unknown as ProcedimientosRow | null;
+
+    if (!row || !first(row.barberia)?.activo) {
+      throw new NotFoundException('No se encontró el barbero');
+    }
+
+    const especialidades = this.toEspecialidades(row);
+    if (especialidades.length > 0) {
+      return { origen: 'especialidades', procedimientos: especialidades };
+    }
+
+    // Sin especialidades asignadas: se ofrece todo el catálogo activo de la barbería.
+    const { data: catalogo, error: errCatalogo } = await supabaseAdmin
+      .from('procedimiento')
+      .select(
+        'id_procedimiento, nombre, descripcion, precio, duracion_minutos, activo',
+      )
+      .eq('id_barberia', row.id_barberia)
+      .eq('activo', true)
+      .order('nombre', { ascending: true });
+
+    if (errCatalogo) {
+      throw new InternalServerErrorException(errCatalogo.message);
+    }
+
+    return {
+      origen: 'barberia',
+      procedimientos: ((catalogo ?? []) as unknown as ProcedimientoRow[]).map(
+        (item) => this.toEspecialidad(item),
+      ),
+    };
+  }
+
+  // ---------------------------------------------------------------------
   // Utilidades internas
   // ---------------------------------------------------------------------
 
   /** Solo las especialidades activas del barbero. */
-  private toEspecialidades(row: BarberoRow): EspecialidadView[] {
+  private toEspecialidades(
+    row: Pick<BarberoRow, 'barbero_procedimiento'>,
+  ): EspecialidadView[] {
     return (row.barbero_procedimiento ?? [])
       .map((item) => first(item.procedimiento))
       .filter((item): item is ProcedimientoRow => !!item?.activo)
-      .map((item) => ({
-        id: item.id_procedimiento,
-        nombre: item.nombre,
-        descripcion: item.descripcion ?? '',
-        precio: Number(item.precio ?? 0),
-        duracionMinutos: Number(item.duracion_minutos ?? 0),
-      }))
+      .map((item) => this.toEspecialidad(item))
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  }
+
+  private toEspecialidad(item: ProcedimientoRow): EspecialidadView {
+    return {
+      id: item.id_procedimiento,
+      nombre: item.nombre,
+      descripcion: item.descripcion ?? '',
+      precio: Number(item.precio ?? 0),
+      duracionMinutos: Number(item.duracion_minutos ?? 0),
+    };
   }
 
   /** Tramos semanales activos, agrupados por barbero. */

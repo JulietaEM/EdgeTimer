@@ -31,6 +31,16 @@ export interface EspecialidadView {
   duracionMinutos: number;
 }
 
+/**
+ * Procedimientos que el cliente puede elegir con un barbero (paso 3).
+ * `especialidades`: los asignados al barbero. `barberia`: el barbero no tiene
+ * ninguno asignado, así que se ofrecen todos los activos de su barbería.
+ */
+export interface ProcedimientosBarberoView {
+  origen: 'especialidades' | 'barberia';
+  procedimientos: EspecialidadView[];
+}
+
 export interface ResenaPublicaView {
   id: string;
   puntuacion: number;

@@ -318,4 +318,98 @@ describe('ClienteService (HU-17)', () => {
       await expect(service.getBarbero(BARBERO_ID)).rejects.toThrow('fallo');
     });
   });
+
+  describe('listProcedimientos (HU-18)', () => {
+    const barberoRow = (procedimientos: unknown[]) => ({
+      id_barberia: BARBERIA_ID,
+      barberia: { activo: true },
+      barbero_procedimiento: procedimientos.map((procedimiento) => ({
+        procedimiento,
+      })),
+    });
+
+    it('rechaza un id que no es uuid sin consultar la base', async () => {
+      const calls = fakeDatabase({});
+
+      await expect(service.listProcedimientos('x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(calls).toHaveLength(0);
+    });
+
+    it('da 404 si el barbero no existe o su barbería está inactiva', async () => {
+      fakeDatabase({ barbero: { data: null } });
+      await expect(
+        service.listProcedimientos(BARBERO_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+
+      jest.restoreAllMocks();
+      fakeDatabase({
+        barbero: {
+          data: { ...barberoRow([corte]), barberia: { activo: false } },
+        },
+      });
+      await expect(
+        service.listProcedimientos(BARBERO_ID),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('ofrece solo las especialidades activas del barbero, sin consultar el catálogo', async () => {
+      const calls = fakeDatabase({
+        barbero: { data: barberoRow([barba, corte, inactivo]) },
+      });
+
+      const result = await service.listProcedimientos(BARBERO_ID);
+
+      expect(result.origen).toBe('especialidades');
+      expect(result.procedimientos.map((item) => item.nombre)).toEqual([
+        'Barba',
+        'Corte clásico',
+      ]);
+      expect(result.procedimientos[1]).toEqual({
+        id: 'p1',
+        nombre: 'Corte clásico',
+        descripcion: '',
+        precio: 25000,
+        duracionMinutos: 30,
+      });
+      expect(calls.some((call) => call.table === 'procedimiento')).toBe(false);
+    });
+
+    it('sin especialidades activas ofrece todos los procedimientos activos de la barbería', async () => {
+      const calls = fakeDatabase({
+        barbero: { data: barberoRow([inactivo]) },
+        procedimiento: { data: [barba, corte] },
+      });
+
+      const result = await service.listProcedimientos(BARBERO_ID);
+
+      expect(result.origen).toBe('barberia');
+      expect(result.procedimientos.map((item) => item.id)).toEqual([
+        'p2',
+        'p1',
+      ]);
+      expect(calls).toContainEqual({
+        table: 'procedimiento',
+        method: 'eq',
+        args: ['id_barberia', BARBERIA_ID],
+      });
+      expect(calls).toContainEqual({
+        table: 'procedimiento',
+        method: 'eq',
+        args: ['activo', true],
+      });
+    });
+
+    it('propaga un error de la base al leer el catálogo', async () => {
+      fakeDatabase({
+        barbero: { data: barberoRow([]) },
+        procedimiento: { error: { message: 'catálogo caído' } },
+      });
+
+      await expect(service.listProcedimientos(BARBERO_ID)).rejects.toThrow(
+        'catálogo caído',
+      );
+    });
+  });
 });

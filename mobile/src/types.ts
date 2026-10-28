@@ -231,3 +231,16 @@ export interface BarberoPerfilCliente {
   especialidades: EspecialidadCliente[];
   resenas: ResenaPublica[];
 }
+
+// ---- Cliente: elegir procedimientos (HU-18) ----
+
+export interface ProcedimientosBarberoCliente {
+  origen: 'especialidades' | 'barberia';
+  procedimientos: EspecialidadCliente[];
+}
+
+/** Barbero elegido al empezar a agendar. */
+export interface BarberoElegido {
+  id: string;
+  nombre: string;
+}
