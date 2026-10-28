@@ -27,6 +27,7 @@ import { BarberoDisponibilidadScreen } from './src/screens/barbero/BarberoDispon
 import { BarberoHomeScreen } from './src/screens/barbero/BarberoHome';
 import { ChangePasswordScreen } from './src/screens/ChangePassword';
 import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
+import { AgendarCitaScreen } from './src/screens/cliente/AgendarCita';
 import { ClienteInicioScreen } from './src/screens/cliente/ClienteInicio';
 import { LoginScreen } from './src/screens/Login';
 import { PerfilScreen } from './src/screens/Perfil';
@@ -34,7 +35,7 @@ import { RegisterScreen } from './src/screens/Register';
 import { RegisterBarberiaScreen } from './src/screens/RegisterBarberia';
 import { ResetPasswordScreen } from './src/screens/ResetPassword';
 import { colors, fonts } from './src/theme';
-import type { AppScreen, Role, Screen, SessionProfile } from './src/types';
+import type { AppScreen, BarberoElegido, Role, Screen, SessionProfile } from './src/types';
 import { clearRecoveryToken, readRecoveryToken } from './src/utils/recoveryLink';
 
 const logo = require('./assets/icon.png');
@@ -59,6 +60,8 @@ function AppContent() {
   const [role, setRole] = useState<Role>('cliente');
   const [profile, setProfile] = useState<SessionProfile | null>(null);
   const [barberoId, setBarberoId] = useState<string | undefined>();
+  // Barbero con el que el cliente está agendando (asistente de citas).
+  const [agendando, setAgendando] = useState<BarberoElegido | null>(null);
   const [feedback, setFeedback] = useState('');
   const [fontsLoaded] = useFonts({
     Satoshi: require('./assets/fonts/Satoshi-Variable.ttf'),
@@ -81,6 +84,7 @@ function AppContent() {
     setSession(null);
     setProfile(null);
     setBarberoId(undefined);
+    setAgendando(null);
     setRole('cliente');
     setFeedback(message);
     setScreen('login');
@@ -116,6 +120,7 @@ function AppContent() {
     setProfile(nextProfile);
     setRole(nextProfile.role);
     setBarberoId(undefined);
+    setAgendando(null);
     setFeedback('');
     setScreen('home');
   };
@@ -172,6 +177,8 @@ function AppContent() {
         onNavigate={(nextScreen) => {
           // El perfil propio se abre sin barbero seleccionado.
           if (nextScreen === 'perfil') setBarberoId(undefined);
+          // Volver a Home cancela el agendamiento en curso.
+          if (nextScreen === 'home') setAgendando(null);
           setScreen(nextScreen);
         }}
       >
@@ -180,6 +187,8 @@ function AppContent() {
             <AdminHomeScreen profile={profile} />
           ) : activeRole === 'barbero' ? (
             <BarberoHomeScreen profile={profile} onNavigate={setScreen} />
+          ) : agendando ? (
+            <AgendarCitaScreen barbero={agendando} onBack={() => setAgendando(null)} />
           ) : (
             <ClienteInicioScreen
               profile={profile}
@@ -187,6 +196,7 @@ function AppContent() {
                 setBarberoId(id);
                 setScreen('perfil');
               }}
+              onAgendar={setAgendando}
             />
           )
         ) : appScreen === 'agenda' ? (
@@ -203,6 +213,11 @@ function AppContent() {
             role={activeRole}
             barberoId={barberoId}
             onAccountDeleted={() => endSession('Tu cuenta fue eliminada.')}
+            onAgendar={(barbero) => {
+              setAgendando(barbero);
+              setBarberoId(undefined);
+              setScreen('home');
+            }}
             onBack={() => {
               setBarberoId(undefined);
               setScreen('home');

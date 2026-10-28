@@ -14,7 +14,7 @@ import api, { postForm } from '../api';
 import { FormModal } from '../components/FormModal';
 import { LabeledInput } from '../components/LabeledInput';
 import { colors, fonts } from '../theme';
-import type { BarberoPerfilCliente, Role, SessionProfile } from '../types';
+import type { BarberoElegido, BarberoPerfilCliente, Role, SessionProfile } from '../types';
 import { readError } from '../utils/errors';
 
 const avatar = require('../../assets/user.png');
@@ -24,6 +24,7 @@ export function PerfilScreen({
   role,
   barberoId,
   onAccountDeleted,
+  onAgendar,
   onBack,
   onProfileUpdate,
 }: {
@@ -31,6 +32,7 @@ export function PerfilScreen({
   role: Role;
   barberoId?: string;
   onAccountDeleted: () => void;
+  onAgendar?: (barbero: BarberoElegido) => void;
   onBack: () => void;
   onProfileUpdate: (profile: SessionProfile) => void;
 }) {
@@ -166,7 +168,11 @@ export function PerfilScreen({
         ) : barberoId && !barbero ? (
           <Text style={styles.empty}>No se pudo cargar el perfil del barbero.</Text>
         ) : barberoId && barbero ? (
-          <BarberPerfilContent barbero={barbero} isCompact={isCompact} />
+          <BarberPerfilContent
+            barbero={barbero}
+            isCompact={isCompact}
+            onAgendar={role === 'cliente' ? onAgendar : undefined}
+          />
         ) : (
           <OwnProfile
             profile={profile}
@@ -217,9 +223,11 @@ export function PerfilScreen({
 function BarberPerfilContent({
   barbero,
   isCompact,
+  onAgendar,
 }: {
   barbero: BarberoPerfilCliente;
   isCompact: boolean;
+  onAgendar?: (barbero: BarberoElegido) => void;
 }) {
   return (
     <View>
@@ -231,6 +239,14 @@ function BarberPerfilContent({
             ? `★ ${barbero.promedioCalificacion.toFixed(1)} (${barbero.totalResenas} ${barbero.totalResenas === 1 ? 'reseña' : 'reseñas'})`
             : 'Sin calificaciones todavía'}
         </Text>
+        {onAgendar && barbero.tieneHorario ? (
+          <Pressable
+            style={styles.uploadButton}
+            onPress={() => onAgendar({ id: barbero.id, nombre: barbero.nombre })}
+          >
+            <Text style={styles.uploadButtonText}>Agendar cita</Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <SectionTitle title="Información" />

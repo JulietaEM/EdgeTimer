@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import api from '../../api';
 import { colors, fonts } from '../../theme';
-import type { BarberiaCliente, BarberoListaCliente, SessionProfile } from '../../types';
+import type {
+  BarberiaCliente,
+  BarberoElegido,
+  BarberoListaCliente,
+  SessionProfile,
+} from '../../types';
 import { readError } from '../../utils/errors';
 
 const avatar = require('../../../assets/user.png');
@@ -12,9 +17,11 @@ const avatar = require('../../../assets/user.png');
 export function ClienteInicioScreen({
   profile,
   onViewBarbero,
+  onAgendar,
 }: {
   profile: SessionProfile | null;
   onViewBarbero: (barberoId: string) => void;
+  onAgendar: (barbero: BarberoElegido) => void;
 }) {
   const { width } = useWindowDimensions();
   const isCompact = width < 620;
@@ -138,11 +145,7 @@ export function ClienteInicioScreen({
           ) : (
             <View style={[styles.grid, styles.gridTop]}>
               {barberos.map((barbero) => (
-                <Pressable
-                  key={barbero.id}
-                  style={[styles.card, isCompact && styles.fullWidthCard]}
-                  onPress={() => onViewBarbero(barbero.id)}
-                >
+                <View key={barbero.id} style={[styles.card, isCompact && styles.fullWidthCard]}>
                   <Image
                     source={barbero.foto ? { uri: barbero.foto } : avatar}
                     style={styles.avatar}
@@ -159,7 +162,19 @@ export function ClienteInicioScreen({
                   <Text style={barbero.tieneHorario ? styles.cardText : styles.warning}>
                     {barbero.tieneHorario ? barbero.horarioResumen : 'Aún no tiene horario'}
                   </Text>
-                </Pressable>
+                  <View style={styles.actions}>
+                    <Pressable
+                      disabled={!barbero.tieneHorario}
+                      style={[styles.primaryButton, !barbero.tieneHorario && styles.disabled]}
+                      onPress={() => onAgendar({ id: barbero.id, nombre: barbero.nombre })}
+                    >
+                      <Text style={styles.primaryButtonText}>Agendar</Text>
+                    </Pressable>
+                    <Pressable style={styles.ghostButton} onPress={() => onViewBarbero(barbero.id)}>
+                      <Text style={styles.ghostButtonText}>Ver perfil</Text>
+                    </Pressable>
+                  </View>
+                </View>
               ))}
             </View>
           )}
@@ -228,6 +243,22 @@ const styles = StyleSheet.create({
   meta: { color: colors.darkGold, fontFamily: fonts.medium, fontSize: 18, marginTop: 4 },
   rating: { color: colors.darkGold, fontFamily: fonts.title, fontSize: 18 },
   warning: { color: colors.danger, fontFamily: fonts.medium, fontSize: 18 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
+  primaryButton: {
+    backgroundColor: colors.black,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  primaryButtonText: { color: colors.white, fontFamily: fonts.title, fontSize: 16 },
+  ghostButton: {
+    borderColor: colors.gold,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  ghostButtonText: { color: colors.darkGold, fontFamily: fonts.title, fontSize: 16 },
   backButton: { alignSelf: 'flex-start', paddingVertical: 8 },
   backText: { color: colors.darkGold, fontFamily: fonts.title, fontSize: 16 },
 });

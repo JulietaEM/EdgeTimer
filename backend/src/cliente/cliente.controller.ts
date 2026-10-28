@@ -22,4 +22,9 @@ export class ClienteController {
   barbero(@Param('id') id: string) {
     return this.clienteService.getBarbero(id);
   }
+
+  @Get('barberos/:id/procedimientos')
+  procedimientos(@Param('id') id: string) {
+    return this.clienteService.listProcedimientos(id);
+  }
 }
