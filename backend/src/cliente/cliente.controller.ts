@@ -1,6 +1,8 @@
-import { Controller, Get, Param } from '@nestjs/common';
-import { Roles } from '../common/auth/decorators';
+import { Controller, Get, Param, Query } from '@nestjs/common';
+import type { AuthUser } from '../common/auth/auth-user';
+import { CurrentUser, Roles } from '../common/auth/decorators';
 import { ClienteService } from './cliente.service';
+import type { DisponibilidadQuery } from './cliente.types';
 
 /** Todo lo de este controlador es solo para clientes. */
 @Controller('cliente')
@@ -26,5 +28,14 @@ export class ClienteController {
   @Get('barberos/:id/procedimientos')
   procedimientos(@Param('id') id: string) {
     return this.clienteService.listProcedimientos(id);
+  }
+
+  @Get('barberos/:id/disponibilidad')
+  disponibilidad(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Query() query: DisponibilidadQuery,
+  ) {
+    return this.clienteService.getDisponibilidad(user, id, query);
   }
 }

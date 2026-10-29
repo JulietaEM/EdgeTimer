@@ -244,3 +244,13 @@ export interface BarberoElegido {
   id: string;
   nombre: string;
 }
+
+// ---- Cliente: fechas y horas disponibles (HU-19) ----
+
+export interface DisponibilidadCliente {
+  duracionMinutos: number;
+  costoTotal: number;
+  desde: string;
+  hasta: string;
+  dias: { fecha: string; horas: string[] }[];
+}

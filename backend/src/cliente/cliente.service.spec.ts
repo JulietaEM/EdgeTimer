@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 
 // El servicio importa supabase.ts, que exige variables de entorno.
 process.env.SUPABASE_URL = 'http://localhost:54321';
@@ -6,6 +6,7 @@ process.env.SUPABASE_KEY = 'anon-key';
 process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 
 import * as supabase from '../supabase';
+import type { AuthUser } from '../common/auth/auth-user';
 import { ClienteService } from './cliente.service';
 
 const BARBERIA_ID = '22222222-2222-4222-8222-222222222222';
@@ -410,6 +411,179 @@ describe('ClienteService (HU-17)', () => {
       await expect(service.listProcedimientos(BARBERO_ID)).rejects.toThrow(
         'catálogo caído',
       );
+    });
+  });
+
+  describe('getDisponibilidad (HU-19 / HU-20)', () => {
+    const CLIENTE_ID = '55555555-5555-4555-8555-555555555555';
+    const user = { profileId: CLIENTE_ID, role: 'cliente' } as AuthUser;
+    // 2026-10-28 12:00 en Bogotá (miércoles). El lunes siguiente es 2026-11-02.
+    const NOW = new Date('2026-10-28T17:00:00Z');
+
+    const P1 = '88888888-8888-4888-8888-888888888881';
+    const P2 = '88888888-8888-4888-8888-888888888882';
+    const barbero = {
+      id_barberia: BARBERIA_ID,
+      barberia: { activo: true },
+      barbero_procedimiento: [
+        { procedimiento: { ...corte, id_procedimiento: P1 } },
+        { procedimiento: { ...barba, id_procedimiento: P2 } },
+      ],
+    };
+    const lunes = [
+      {
+        id_barbero: BARBERO_ID,
+        dia_semana: 1,
+        hora_inicio: '08:00:00',
+        hora_fin: '10:00:00',
+      },
+    ];
+    const query = { procedimientos: P1, desde: '2026-11-02', dias: '1' };
+
+    beforeEach(() => {
+      jest
+        .spyOn(service as unknown as { now: () => Date }, 'now')
+        .mockReturnValue(NOW);
+    });
+
+    it('devuelve las horas libres con la duración y el costo de lo elegido', async () => {
+      // `corte` y `barba` duran 30 min y cuestan 25.000 cada uno.
+      const calls = fakeDatabase({
+        barbero: { data: barbero },
+        disponibilidad_barbero: { data: lunes },
+        cita: {
+          data: [
+            {
+              inicio_at: '2026-11-02T14:00:00Z', // 09:00 Bogotá
+              fin_at: '2026-11-02T14:30:00Z',
+            },
+          ],
+        },
+      });
+
+      const result = await service.getDisponibilidad(user, BARBERO_ID, {
+        ...query,
+        procedimientos: `${P1},${P2}`,
+      });
+
+      expect(result).toEqual({
+        duracionMinutos: 60,
+        costoTotal: 50000,
+        desde: '2026-11-02',
+        hasta: '2026-11-02',
+        dias: [{ fecha: '2026-11-02', horas: ['08:00'] }],
+      });
+      // Resta las citas del barbero y también las del propio cliente.
+      expect(calls).toContainEqual({
+        table: 'cita',
+        method: 'eq',
+        args: ['id_barbero', BARBERO_ID],
+      });
+      expect(calls).toContainEqual({
+        table: 'cita',
+        method: 'eq',
+        args: ['id_cliente', CLIENTE_ID],
+      });
+      expect(calls).toContainEqual({
+        table: 'cita',
+        method: 'in',
+        args: ['estado', ['pendiente', 'confirmada']],
+      });
+    });
+
+    it('con excluirCita la cita que se reprograma no ocupa su horario', async () => {
+      const calls = fakeDatabase({
+        barbero: { data: barbero },
+        disponibilidad_barbero: { data: lunes },
+        cita: { data: [] },
+      });
+      const excluirCita = '66666666-6666-4666-8666-666666666666';
+
+      await service.getDisponibilidad(user, BARBERO_ID, {
+        ...query,
+        excluirCita,
+      });
+
+      expect(
+        calls.filter(
+          (call) => call.method === 'neq' && call.args[1] === excluirCita,
+        ),
+      ).toHaveLength(2); // barbero y cliente
+    });
+
+    it('sin excluirCita no filtra ninguna cita', async () => {
+      const calls = fakeDatabase({
+        barbero: { data: barbero },
+        disponibilidad_barbero: { data: lunes },
+        cita: { data: [] },
+      });
+
+      await service.getDisponibilidad(user, BARBERO_ID, query);
+
+      expect(calls.some((call) => call.method === 'neq')).toBe(false);
+    });
+
+    it('un barbero sin horario no tiene fechas y no consulta citas', async () => {
+      const calls = fakeDatabase({
+        barbero: { data: barbero },
+        disponibilidad_barbero: { data: [] },
+      });
+
+      const result = await service.getDisponibilidad(user, BARBERO_ID, query);
+
+      expect(result.dias).toEqual([]);
+      expect(result.duracionMinutos).toBe(30);
+      expect(calls.some((call) => call.table === 'cita')).toBe(false);
+    });
+
+    it('rechaza un procedimiento que el barbero no ofrece', async () => {
+      fakeDatabase({ barbero: { data: barbero } });
+
+      await expect(
+        service.getDisponibilidad(user, BARBERO_ID, {
+          ...query,
+          procedimientos: '77777777-7777-4777-8777-777777777777',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('valida los parámetros antes de consultar la base', async () => {
+      const calls = fakeDatabase({});
+
+      for (const bad of [
+        { ...query, procedimientos: undefined },
+        { ...query, desde: '02-11-2026' },
+        { ...query, dias: '99' },
+        { ...query, excluirCita: 'no-uuid' },
+      ]) {
+        await expect(
+          service.getDisponibilidad(user, BARBERO_ID, bad),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      }
+      expect(calls).toHaveLength(0);
+    });
+
+    it('da 404 si el barbero no existe', async () => {
+      fakeDatabase({ barbero: { data: null } });
+
+      await expect(
+        service.getDisponibilidad(user, BARBERO_ID, {
+          ...query,
+          procedimientos: '77777777-7777-4777-8777-777777777777',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('propaga un error de la base al leer las citas', async () => {
+      fakeDatabase({
+        barbero: { data: barbero },
+        disponibilidad_barbero: { data: lunes },
+        cita: { error: { message: 'citas caídas' } },
+      });
+
+      await expect(
+        service.getDisponibilidad(user, BARBERO_ID, query),
+      ).rejects.toThrow('citas caídas');
     });
   });
 });
