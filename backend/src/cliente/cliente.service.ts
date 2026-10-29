@@ -1,22 +1,31 @@
 import {
+  BadRequestException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { isUuid } from '../admin/admin.utils';
 import { bogotaDate } from '../barbero/barbero.utils';
+import type { AuthUser } from '../common/auth/auth-user';
 import { first, type One } from '../common/postgrest';
 import { getSignedStorageUrl, supabaseAdmin } from '../supabase';
 import type {
   BarberiaView,
   BarberoListItem,
   BarberoPerfilView,
+  DisponibilidadQuery,
+  DisponibilidadView,
   EspecialidadView,
   ProcedimientosBarberoView,
 } from './cliente.types';
 import {
+  addDays,
+  computeFreeSlots,
   firstName,
+  parseDateRange,
+  parseProcedimientoIds,
   summarizeSchedule,
+  type BusyRange,
   type ScheduleBlock,
 } from './cliente.utils';
 
@@ -327,8 +336,125 @@ export class ClienteService {
   }
 
   // ---------------------------------------------------------------------
+  // HU-19: solo fechas y horas disponibles (con la duración y el costo de HU-20)
+  // ---------------------------------------------------------------------
+
+  async getDisponibilidad(
+    user: AuthUser,
+    barberoId: string,
+    query: DisponibilidadQuery,
+  ): Promise<DisponibilidadView> {
+    const ids = parseProcedimientoIds(query?.procedimientos);
+    const now = this.now();
+    const { desde, dias } = parseDateRange(query ?? {}, now);
+    const excluirCita = this.parseExcluirCita(query?.excluirCita);
+
+    // También comprueba que el barbero y su barbería existan y estén activos.
+    const { procedimientos } = await this.listProcedimientos(barberoId);
+    const elegidos = ids.map((id) =>
+      procedimientos.find((item) => item.id === id),
+    );
+
+    if (elegidos.some((item) => !item)) {
+      throw new BadRequestException(
+        'Alguno de los procedimientos no lo ofrece este barbero',
+      );
+    }
+
+    const duracionMinutos = elegidos.reduce(
+      (total, item) => total + (item?.duracionMinutos ?? 0),
+      0,
+    );
+    const costoTotal = elegidos.reduce(
+      (total, item) => total + (item?.precio ?? 0),
+      0,
+    );
+    const hasta = addDays(desde, dias - 1);
+    const base = { duracionMinutos, costoTotal, desde, hasta };
+
+    const schedule =
+      (await this.loadSchedules([barberoId])).get(barberoId) ?? [];
+    if (schedule.length === 0) {
+      return { ...base, dias: [] };
+    }
+
+    const windowEnd = new Date(`${addDays(desde, dias)}T00:00:00-05:00`);
+    const [barberoBusy, clienteBusy] = await Promise.all([
+      this.loadBusy('id_barbero', barberoId, now, windowEnd, excluirCita),
+      this.loadBusy('id_cliente', user.profileId, now, windowEnd, excluirCita),
+    ]);
+
+    return {
+      ...base,
+      dias: computeFreeSlots({
+        blocks: schedule.map((block) => ({
+          dia: block.dia,
+          inicio: this.toMinutes(block.inicio),
+          fin: this.toMinutes(block.fin),
+        })),
+        busy: [...barberoBusy, ...clienteBusy],
+        desde,
+        dias,
+        duracionMinutos,
+        now,
+      }),
+    };
+  }
+
+  // ---------------------------------------------------------------------
   // Utilidades internas
   // ---------------------------------------------------------------------
+
+  /** Reloj aparte para poder fijar la hora en las pruebas. */
+  protected now() {
+    return new Date();
+  }
+
+  private toMinutes(hora: string) {
+    const [hours, minutes] = hora.split(':').map(Number);
+    return hours * 60 + minutes;
+  }
+
+  private parseExcluirCita(value: unknown) {
+    if (value === undefined || value === '') {
+      return null;
+    }
+
+    if (typeof value !== 'string' || !isUuid(value)) {
+      throw new BadRequestException('La cita a excluir no es válida');
+    }
+
+    return value;
+  }
+
+  /** Citas activas (pendientes o confirmadas) que aún no terminan dentro de la ventana. */
+  private async loadBusy(
+    column: 'id_barbero' | 'id_cliente',
+    id: string,
+    now: Date,
+    windowEnd: Date,
+    excluirCita: string | null,
+  ): Promise<BusyRange[]> {
+    let request = supabaseAdmin
+      .from('cita')
+      .select('inicio_at, fin_at')
+      .eq(column, id)
+      .in('estado', ['pendiente', 'confirmada'])
+      .gt('fin_at', now.toISOString())
+      .lt('inicio_at', windowEnd.toISOString());
+
+    if (excluirCita) {
+      request = request.neq('id_cita', excluirCita);
+    }
+
+    const { data, error } = await request;
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    return data ?? [];
+  }
 
   /** Solo las especialidades activas del barbero. */
   private toEspecialidades(

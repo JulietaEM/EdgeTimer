@@ -70,3 +70,24 @@ export interface BarberoPerfilView {
   /** Las más recientes (máximo 10). */
   resenas: ResenaPublicaView[];
 }
+
+/** Parámetros de `GET /cliente/barberos/:id/disponibilidad`. */
+export interface DisponibilidadQuery {
+  /** ids de procedimientos separados por coma. */
+  procedimientos?: string;
+  /** AAAA-MM-DD; por defecto hoy. */
+  desde?: string;
+  /** 1 a 31; por defecto 14. */
+  dias?: string;
+  /** Cita que se está reprogramando: su horario actual cuenta como libre. */
+  excluirCita?: string;
+}
+
+/** Fechas y horas libres para agendar (paso 4) con los totales de la cita (HU-20). */
+export interface DisponibilidadView {
+  duracionMinutos: number;
+  costoTotal: number;
+  desde: string;
+  hasta: string;
+  dias: { fecha: string; horas: string[] }[];
+}
