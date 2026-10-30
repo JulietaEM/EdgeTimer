@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 
 // El servicio importa supabase.ts, que exige variables de entorno.
 process.env.SUPABASE_URL = 'http://localhost:54321';
@@ -16,9 +20,17 @@ type Result = { data?: unknown; error?: unknown; count?: number };
 type Call = { table: string; method: string; args: unknown[] };
 
 /** Constructor encadenable: from(tabla) resuelve a `results[tabla]` y anota cada llamada. */
-function fakeFrom(results: Record<string, Result>, calls: Call[]) {
+function fakeFrom(results: Record<string, Result | Result[]>, calls: Call[]) {
   return (table: string) => {
-    const result = { data: null, error: null, ...results[table] };
+    // Un arreglo da un resultado distinto por cada from(tabla), en orden; el
+    // último se repite. Útil cuando una tabla se consulta varias veces.
+    const entry = results[table];
+    const picked = Array.isArray(entry)
+      ? entry.length > 1
+        ? entry.shift()
+        : entry[0]
+      : entry;
+    const result = { data: null, error: null, ...picked };
 
     const proxy: any = new Proxy(function () {}, {
       get: (_target, prop: string) => {
@@ -41,12 +53,21 @@ function fakeFrom(results: Record<string, Result>, calls: Call[]) {
   };
 }
 
-function fakeDatabase(admin: Record<string, Result>) {
+function fakeDatabase(admin: Record<string, Result | Result[]>) {
   const calls: Call[] = [];
   jest
     .spyOn(supabase.supabaseAdmin, 'from')
     .mockImplementation(fakeFrom(admin, calls) as never);
   return calls;
+}
+
+/** Cliente que actúa con el token del usuario (el que aplica RLS y triggers). */
+function fakeUserClient(results: Record<string, Result | Result[]>) {
+  const calls: Call[] = [];
+  const spy = jest
+    .spyOn(supabase, 'createSupabaseUserClient')
+    .mockReturnValue({ from: fakeFrom(results, calls) } as never);
+  return { calls, spy };
 }
 
 const corte = {
@@ -584,6 +605,306 @@ describe('ClienteService (HU-17)', () => {
       await expect(
         service.getDisponibilidad(user, BARBERO_ID, query),
       ).rejects.toThrow('citas caídas');
+    });
+  });
+
+  describe('crearCita (HU-20)', () => {
+    const CLIENTE_ID = '55555555-5555-4555-8555-555555555555';
+    const CITA_ID = '99999999-9999-4999-8999-999999999999';
+    const P1 = '88888888-8888-4888-8888-888888888881';
+    const user = {
+      profileId: CLIENTE_ID,
+      role: 'cliente',
+      accessToken: 'token-del-cliente',
+    } as AuthUser;
+    // Miércoles 2026-10-28 12:00 en Bogotá; el lunes siguiente es 2026-11-02.
+    const NOW = new Date('2026-10-28T17:00:00Z');
+    const dto = {
+      idBarbero: BARBERO_ID,
+      procedimientoIds: [P1],
+      fecha: '2026-11-02',
+      horaInicio: '08:00',
+    };
+
+    const barbero = {
+      id_barberia: BARBERIA_ID,
+      barberia: { activo: true },
+      barbero_procedimiento: [
+        { procedimiento: { ...corte, id_procedimiento: P1 } },
+      ],
+    };
+    const lunes = [
+      {
+        id_barbero: BARBERO_ID,
+        dia_semana: 1,
+        hora_inicio: '08:00:00',
+        hora_fin: '10:00:00',
+      },
+    ];
+    const citaRow = {
+      id_cita: CITA_ID,
+      estado: 'pendiente',
+      inicio_at: '2026-11-02T13:00:00Z',
+      fin_at: '2026-11-02T13:30:00Z',
+      notas_cliente: null,
+      motivo_estado: null,
+      barbero: {
+        id_barbero: BARBERO_ID,
+        nombre_barbero: 'Carlos',
+        foto_perfil: null,
+      },
+      barberia: {
+        id_barberia: BARBERIA_ID,
+        nombre: 'AlphaCorte',
+        direccion: null,
+      },
+      cita_procedimiento: [
+        {
+          precio_aplicado: '27000',
+          duracion_minutos_aplicada: 30,
+          procedimiento: { id_procedimiento: P1, nombre: 'Corte clásico' },
+        },
+      ],
+    };
+    /** Las dos lecturas de citas ocupadas (barbero y cliente) y luego la cita creada. */
+    const adminDb = (busy: unknown[] = [], ...rest: Result[]) => ({
+      barbero: { data: barbero },
+      disponibilidad_barbero: { data: lunes },
+      cita: [{ data: busy }, { data: busy }, ...rest],
+    });
+
+    beforeEach(() => {
+      jest
+        .spyOn(service as unknown as { now: () => Date }, 'now')
+        .mockReturnValue(NOW);
+    });
+
+    it('crea la cita pendiente con el token del cliente y devuelve su resumen', async () => {
+      fakeDatabase(adminDb([], { data: citaRow }));
+      const { calls, spy } = fakeUserClient({
+        cita: { data: { id_cita: CITA_ID } },
+        cita_procedimiento: { error: null },
+      });
+
+      const result = await service.crearCita(user, dto);
+
+      expect(spy).toHaveBeenCalledWith('token-del-cliente');
+      expect(calls).toContainEqual({
+        table: 'cita',
+        method: 'insert',
+        args: [
+          {
+            id_cliente: CLIENTE_ID,
+            id_barbero: BARBERO_ID,
+            inicio_at: '2026-11-02T13:00:00.000Z', // 08:00 en Bogotá
+            fin_at: '2026-11-02T13:30:00.000Z',
+            estado: 'pendiente',
+            notas_cliente: null,
+          },
+        ],
+      });
+      expect(calls).toContainEqual({
+        table: 'cita_procedimiento',
+        method: 'insert',
+        args: [[{ id_cita: CITA_ID, id_procedimiento: P1 }]],
+      });
+      expect(result.message).toBe(
+        'Solicitud enviada. Espera la confirmación del barbero.',
+      );
+      expect(result.cita).toMatchObject({
+        id: CITA_ID,
+        estado: 'pendiente',
+        estadoLabel: 'Pendiente',
+        fecha: '2026-11-02',
+        horaInicio: '08:00',
+        horaFin: '08:30',
+        duracionMinutos: 30,
+        costoTotal: 27000, // precio_aplicado, no el precio actual del catálogo
+        barbero: { id: BARBERO_ID, nombre: 'Carlos', foto: null },
+        barberia: { nombre: 'AlphaCorte', direccion: '' },
+      });
+    });
+
+    it('guarda las notas recortadas', async () => {
+      fakeDatabase(adminDb([], { data: citaRow }));
+      const { calls } = fakeUserClient({
+        cita: { data: { id_cita: CITA_ID } },
+        cita_procedimiento: { error: null },
+      });
+
+      await service.crearCita(user, { ...dto, notas: '  Sin máquina  ' });
+
+      expect(calls).toContainEqual(
+        expect.objectContaining({
+          table: 'cita',
+          method: 'insert',
+          args: [expect.objectContaining({ notas_cliente: 'Sin máquina' })],
+        }),
+      );
+    });
+
+    it('si la hora ya se ocupó, responde 409 sin escribir nada', async () => {
+      fakeDatabase(
+        adminDb([
+          {
+            inicio_at: '2026-11-02T13:00:00Z',
+            fin_at: '2026-11-02T13:30:00Z',
+          },
+        ]),
+      );
+      const { spy } = fakeUserClient({});
+
+      await expect(service.crearCita(user, dto)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una hora que no es de la disponibilidad (fuera del horario)', async () => {
+      fakeDatabase(adminDb([]));
+      const { spy } = fakeUserClient({});
+
+      await expect(
+        service.crearCita(user, { ...dto, horaInicio: '15:00' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('rechaza una fecha u hora pasada antes de consultar la base', async () => {
+      const calls = fakeDatabase({});
+
+      await expect(
+        service.crearCita(user, { ...dto, fecha: '2026-10-26' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(calls).toHaveLength(0);
+    });
+
+    it('valida el cuerpo antes de consultar la base', async () => {
+      const calls = fakeDatabase({});
+
+      for (const bad of [
+        { ...dto, idBarbero: 'x' },
+        { ...dto, procedimientoIds: [] },
+        { ...dto, procedimientoIds: 'p1' as unknown as string[] },
+        { ...dto, horaInicio: '08:10' },
+        { ...dto, fecha: '02/11/2026' },
+      ]) {
+        await expect(service.crearCita(user, bad)).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+      }
+      expect(calls).toHaveLength(0);
+    });
+
+    it('si la base detecta un solape de último momento lo traduce como 409 para el cliente', async () => {
+      fakeDatabase(adminDb([]));
+      const { calls } = fakeUserClient({
+        cita: {
+          error: {
+            message:
+              'conflicting key value violates exclusion constraint "no_citas_solapadas_barbero"',
+          },
+        },
+      });
+
+      await expect(service.crearCita(user, dto)).rejects.toThrow(
+        'Ese horario acaba de ocuparse. Elige otro',
+      );
+      expect(calls.some((call) => call.table === 'cita_procedimiento')).toBe(
+        false,
+      );
+    });
+
+    it('si fallan los procedimientos retira la cita recién creada (solo esa)', async () => {
+      const adminCalls = fakeDatabase(adminDb([], { data: null }));
+      fakeUserClient({
+        cita: { data: { id_cita: CITA_ID } },
+        cita_procedimiento: {
+          error: { message: 'El procedimiento no esta activo' },
+        },
+      });
+
+      await expect(service.crearCita(user, dto)).rejects.toThrow(
+        'Alguno de los procedimientos ya no está disponible',
+      );
+
+      const deleted = adminCalls.filter(
+        (call) => call.table === 'cita' && call.method === 'delete',
+      );
+      expect(deleted).toHaveLength(1);
+      for (const filter of [
+        ['id_cita', CITA_ID],
+        ['id_cliente', CLIENTE_ID],
+        ['estado', 'pendiente'],
+      ]) {
+        expect(adminCalls).toContainEqual({
+          table: 'cita',
+          method: 'eq',
+          args: filter,
+        });
+      }
+    });
+
+    it('rechaza procedimientos que el barbero no ofrece', async () => {
+      fakeDatabase({ barbero: { data: barbero } });
+      const { spy } = fakeUserClient({});
+
+      await expect(
+        service.crearCita(user, {
+          ...dto,
+          procedimientoIds: ['77777777-7777-4777-8777-777777777777'],
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(spy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getCita', () => {
+    const user = {
+      profileId: '55555555-5555-4555-8555-555555555555',
+    } as AuthUser;
+    const ID = '99999999-9999-4999-8999-999999999999';
+
+    it('da 404 con un id inválido o si la cita no es de este cliente', async () => {
+      const calls = fakeDatabase({ cita: { data: null } });
+
+      await expect(service.getCita(user, 'x')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(calls).toHaveLength(0);
+
+      await expect(service.getCita(user, ID)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(calls).toContainEqual({
+        table: 'cita',
+        method: 'eq',
+        args: ['id_cliente', user.profileId],
+      });
+    });
+
+    it('muestra "Vencida" para una solicitud que nadie respondió', async () => {
+      fakeDatabase({
+        cita: {
+          data: {
+            id_cita: ID,
+            estado: 'rechazada',
+            inicio_at: '2026-11-02T13:00:00Z',
+            fin_at: '2026-11-02T13:30:00Z',
+            notas_cliente: null,
+            motivo_estado: 'Solicitud vencida sin respuesta',
+            barbero: null,
+            barberia: null,
+            cita_procedimiento: [],
+          },
+        },
+      });
+
+      const cita = await service.getCita(user, ID);
+
+      expect(cita.estado).toBe('rechazada');
+      expect(cita.estadoLabel).toBe('Vencida');
+      expect(cita.barbero.nombre).toBe('Barbero');
     });
   });
 });

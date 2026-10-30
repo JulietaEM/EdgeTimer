@@ -1,18 +1,29 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { isUuid } from '../admin/admin.utils';
-import { bogotaDate } from '../barbero/barbero.utils';
+import { optionalText } from '../auth/auth.validation';
+import { bogotaDate, bogotaHour, toInstant } from '../barbero/barbero.utils';
 import type { AuthUser } from '../common/auth/auth-user';
+import { mapCitaError } from '../common/cita-errors';
+import { EXPIRED_REASON } from '../common/maintenance';
 import { first, type One } from '../common/postgrest';
-import { getSignedStorageUrl, supabaseAdmin } from '../supabase';
+import {
+  createSupabaseUserClient,
+  getSignedStorageUrl,
+  supabaseAdmin,
+} from '../supabase';
 import type {
   BarberiaView,
   BarberoListItem,
   BarberoPerfilView,
+  CitaClienteView,
+  CrearCitaDto,
+  EstadoCitaCliente,
   DisponibilidadQuery,
   DisponibilidadView,
   EspecialidadView,
@@ -33,6 +44,30 @@ const BARBERIA_SELECT =
   'id_barberia, nombre, descripcion, direccion, telefono, logo_url';
 
 const MAX_RESENAS = 10;
+
+const CITA_SELECT = `
+  id_cita,
+  estado,
+  inicio_at,
+  fin_at,
+  notas_cliente,
+  motivo_estado,
+  barbero:barbero(id_barbero, nombre_barbero, foto_perfil),
+  barberia:barberia(id_barberia, nombre, direccion),
+  cita_procedimiento(
+    precio_aplicado,
+    duracion_minutos_aplicada,
+    procedimiento:procedimiento(id_procedimiento, nombre)
+  )
+`;
+
+const ESTADO_LABEL: Record<EstadoCitaCliente, string> = {
+  pendiente: 'Pendiente',
+  confirmada: 'Confirmada',
+  realizada: 'Realizada',
+  cancelada: 'Cancelada',
+  rechazada: 'Rechazada',
+};
 
 interface BarberiaRow {
   id_barberia: string;
@@ -58,6 +93,30 @@ interface BarberoRow {
   foto_perfil: string | null;
   promedio_calificacion: number | string | null;
   barbero_procedimiento?: { procedimiento: One<ProcedimientoRow> }[];
+}
+
+interface CitaRow {
+  id_cita: string;
+  estado: EstadoCitaCliente;
+  inicio_at: string;
+  fin_at: string;
+  notas_cliente: string | null;
+  motivo_estado: string | null;
+  barbero: One<{
+    id_barbero: string;
+    nombre_barbero: string;
+    foto_perfil: string | null;
+  }>;
+  barberia: One<{
+    id_barberia: string;
+    nombre: string;
+    direccion: string | null;
+  }>;
+  cita_procedimiento?: {
+    precio_aplicado: number | string;
+    duracion_minutos_aplicada: number;
+    procedimiento: One<{ id_procedimiento: string; nombre: string }>;
+  }[];
 }
 
 interface ProcedimientosRow extends Pick<BarberoRow, 'barbero_procedimiento'> {
@@ -399,6 +458,180 @@ export class ClienteService {
         now,
       }),
     };
+  }
+
+  // ---------------------------------------------------------------------
+  // HU-20: confirmar y solicitar la cita
+  // ---------------------------------------------------------------------
+
+  /**
+   * Crea la solicitud (nace pendiente: el barbero la acepta o la rechaza).
+   * Se escribe con el token del cliente para que apliquen las políticas y los
+   * triggers de la base, que son la última barrera (solapes, disponibilidad,
+   * procedimientos de la barbería).
+   */
+  async crearCita(user: AuthUser, dto: CrearCitaDto) {
+    const idBarbero = this.requireUuid(dto?.idBarbero, 'Selecciona un barbero');
+    const procedimientoIds = this.requireIds(dto?.procedimientoIds);
+    const inicio = toInstant(dto?.fecha, dto?.horaInicio);
+    const notas = optionalText(dto?.notas, 300);
+
+    if (inicio.getTime() <= this.now().getTime()) {
+      throw new BadRequestException(
+        'No se puede programar en una fecha u hora pasada',
+      );
+    }
+
+    // La hora se vuelve a comprobar justo antes de guardar: pudo ocuparse mientras
+    // el cliente confirmaba. Esto reutiliza todas las reglas de la disponibilidad.
+    const disponibilidad = await this.getDisponibilidad(user, idBarbero, {
+      procedimientos: procedimientoIds.join(','),
+      desde: dto.fecha,
+      dias: '1',
+    });
+    const libre = disponibilidad.dias
+      .find((dia) => dia.fecha === dto.fecha)
+      ?.horas.includes(dto.horaInicio);
+
+    if (!libre) {
+      throw new ConflictException('Esa hora ya no está disponible. Elige otra');
+    }
+
+    const fin = new Date(
+      inicio.getTime() + disponibilidad.duracionMinutos * 60_000,
+    );
+    const client = createSupabaseUserClient(user.accessToken);
+
+    const { data, error } = await client
+      .from('cita')
+      .insert({
+        id_cliente: user.profileId,
+        id_barbero: idBarbero,
+        inicio_at: inicio.toISOString(),
+        fin_at: fin.toISOString(),
+        estado: 'pendiente',
+        notas_cliente: notas,
+      })
+      .select('id_cita')
+      .single<{ id_cita: string }>();
+
+    if (error || !data) {
+      throw mapCitaError(
+        error?.message ?? 'No se pudo crear la cita',
+        'cliente',
+      );
+    }
+
+    const idCita = data.id_cita;
+    // El precio y la duración aplicados los congela un trigger de la base.
+    const { error: errProcedimientos } = await client
+      .from('cita_procedimiento')
+      .insert(
+        procedimientoIds.map((id) => ({
+          id_cita: idCita,
+          id_procedimiento: id,
+        })),
+      );
+
+    if (errProcedimientos) {
+      // Sin procedimientos la cita no sirve: se retira (el cliente no puede borrar
+      // citas por política, así que se limpia con la service role y solo esta cita).
+      await supabaseAdmin
+        .from('cita')
+        .delete()
+        .eq('id_cita', idCita)
+        .eq('id_cliente', user.profileId)
+        .eq('estado', 'pendiente');
+
+      throw mapCitaError(errProcedimientos.message, 'cliente');
+    }
+
+    return {
+      message: 'Solicitud enviada. Espera la confirmación del barbero.',
+      cita: await this.getCita(user, idCita),
+    };
+  }
+
+  /** Una cita solo se lee si es de este cliente. */
+  async getCita(user: AuthUser, id: string): Promise<CitaClienteView> {
+    if (!isUuid(id)) {
+      throw new NotFoundException('No se encontró la cita');
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('cita')
+      .select(CITA_SELECT)
+      .eq('id_cita', id)
+      .eq('id_cliente', user.profileId)
+      .maybeSingle();
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    if (!data) {
+      throw new NotFoundException('No se encontró la cita');
+    }
+
+    return this.toCitaView(data);
+  }
+
+  private async toCitaView(row: CitaRow): Promise<CitaClienteView> {
+    // Precio y duración salen de las columnas congeladas al agendar.
+    const procedimientos = (row.cita_procedimiento ?? []).map((item) => {
+      const procedimiento = first(item.procedimiento);
+      return {
+        id: procedimiento?.id_procedimiento ?? '',
+        nombre: procedimiento?.nombre ?? 'Procedimiento',
+        precio: Number(item.precio_aplicado ?? 0),
+        duracionMinutos: Number(item.duracion_minutos_aplicada ?? 0),
+      };
+    });
+    const barbero = first(row.barbero);
+    const barberia = first(row.barberia);
+    const vencida =
+      row.estado === 'rechazada' && row.motivo_estado === EXPIRED_REASON;
+
+    return {
+      id: row.id_cita,
+      estado: row.estado,
+      estadoLabel: vencida ? 'Vencida' : ESTADO_LABEL[row.estado],
+      fecha: bogotaDate(row.inicio_at),
+      horaInicio: bogotaHour(row.inicio_at),
+      horaFin: bogotaHour(row.fin_at),
+      duracionMinutos: procedimientos.reduce(
+        (total, item) => total + item.duracionMinutos,
+        0,
+      ),
+      costoTotal: procedimientos.reduce(
+        (total, item) => total + item.precio,
+        0,
+      ),
+      notas: row.notas_cliente ?? '',
+      motivo: row.motivo_estado,
+      barbero: {
+        id: barbero?.id_barbero ?? '',
+        nombre: barbero?.nombre_barbero ?? 'Barbero',
+        foto: await getSignedStorageUrl(barbero?.foto_perfil),
+      },
+      barberia: {
+        id: barberia?.id_barberia ?? '',
+        nombre: barberia?.nombre ?? '',
+        direccion: barberia?.direccion ?? '',
+      },
+      procedimientos,
+    };
+  }
+
+  private requireUuid(value: unknown, message: string) {
+    if (typeof value !== 'string' || !isUuid(value)) {
+      throw new BadRequestException(message);
+    }
+    return value;
+  }
+
+  private requireIds(value: unknown) {
+    return parseProcedimientoIds(Array.isArray(value) ? value.join(',') : '');
   }
 
   // ---------------------------------------------------------------------

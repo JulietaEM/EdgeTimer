@@ -1,8 +1,8 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import type { AuthUser } from '../common/auth/auth-user';
 import { CurrentUser, Roles } from '../common/auth/decorators';
 import { ClienteService } from './cliente.service';
-import type { DisponibilidadQuery } from './cliente.types';
+import type { CrearCitaDto, DisponibilidadQuery } from './cliente.types';
 
 /** Todo lo de este controlador es solo para clientes. */
 @Controller('cliente')
@@ -37,5 +37,10 @@ export class ClienteController {
     @Query() query: DisponibilidadQuery,
   ) {
     return this.clienteService.getDisponibilidad(user, id, query);
+  }
+
+  @Post('citas')
+  crearCita(@CurrentUser() user: AuthUser, @Body() dto: CrearCitaDto) {
+    return this.clienteService.crearCita(user, dto);
   }
 }
