@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -11,6 +10,8 @@ import { isUuid, parsePage } from '../admin/admin.utils';
 import { optionalText } from '../auth/auth.validation';
 import { AccountsService } from '../common/accounts.service';
 import type { AuthUser } from '../common/auth/auth-user';
+import { mapCitaError } from '../common/cita-errors';
+import { EXPIRED_REASON, markPastCitas } from '../common/maintenance';
 import { first, type One } from '../common/postgrest';
 import {
   createSupabaseUserClient,
@@ -37,9 +38,6 @@ import type {
 } from './barbero.types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Motivo con el que la base de datos vence las solicitudes sin respuesta. */
-const EXPIRED_REASON = 'Solicitud vencida sin respuesta';
 
 const CITA_SELECT = `
   id_cita,
@@ -457,18 +455,8 @@ export class BarberoService {
     });
   }
 
-  /**
-   * Mantenimiento de estados antes de listar: las solicitudes sin respuesta cuya
-   * hora ya pasó quedan vencidas y las citas confirmadas que ya terminaron pasan
-   * a realizadas. (Más adelante lo hará un job programado.)
-   */
-  private async markPast() {
-    for (const fn of ['vencer_solicitudes', 'realizar_citas_vencidas']) {
-      const { error } = await supabaseAdmin.rpc(fn);
-      if (error) {
-        this.logger.warn(`No se pudo ejecutar ${fn}: ${error.message}`);
-      }
-    }
+  private markPast() {
+    return markPastCitas(this.logger);
   }
 
   /** Una cita solo se toca si es de este barbero. */
@@ -515,7 +503,7 @@ export class BarberoService {
       .maybeSingle();
 
     if (error) {
-      throw this.mapCitaError(error.message);
+      throw mapCitaError(error.message, 'barbero');
     }
 
     if (!data) {
@@ -523,37 +511,6 @@ export class BarberoService {
         'La cita cambió y ya no se puede actualizar. Recarga la lista.',
       );
     }
-  }
-
-  /** Traduce los mensajes de las reglas de la base de datos a respuestas claras. */
-  private mapCitaError(message: string) {
-    if (message.includes('no_citas_solapadas_barbero')) {
-      return new ConflictException('Ya tienes otra cita en ese horario');
-    }
-    if (message.includes('no_citas_solapadas_cliente')) {
-      return new ConflictException(
-        'El cliente ya tiene otra cita en ese horario',
-      );
-    }
-    if (/disponibilidad/i.test(message)) {
-      return new BadRequestException(
-        'Ese horario queda fuera de tu disponibilidad',
-      );
-    }
-    if (/anticipacion/i.test(message)) {
-      return new BadRequestException(
-        'Solo puedes cancelar o reprogramar citas con al menos 1 día de antelación',
-      );
-    }
-    if (/pasad/i.test(message)) {
-      return new BadRequestException(
-        'No se puede programar en una fecha u hora pasada',
-      );
-    }
-    if (/permisos|transicion/i.test(message)) {
-      return new ForbiddenException('No tienes permisos para este cambio');
-    }
-    return new InternalServerErrorException(message);
   }
 
   private async durationOf(citaId: string) {

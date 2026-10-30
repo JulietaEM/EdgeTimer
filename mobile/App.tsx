@@ -188,7 +188,11 @@ function AppContent() {
           ) : activeRole === 'barbero' ? (
             <BarberoHomeScreen profile={profile} onNavigate={setScreen} />
           ) : agendando ? (
-            <AgendarCitaScreen barbero={agendando} onBack={() => setAgendando(null)} />
+            <AgendarCitaScreen
+              barbero={agendando}
+              onBack={() => setAgendando(null)}
+              onDone={() => setAgendando(null)}
+            />
           ) : (
             <ClienteInicioScreen
               profile={profile}

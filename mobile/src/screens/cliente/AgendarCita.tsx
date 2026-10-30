@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import api from '../../api';
 import { colors, fonts } from '../../theme';
 import type {
   BarberoElegido,
+  CitaCliente,
   DisponibilidadCliente,
   EspecialidadCliente,
   ProcedimientosBarberoCliente,
@@ -12,24 +13,33 @@ import { readError } from '../../utils/errors';
 import { formatMoney, formatShortDate } from '../../utils/format';
 
 // Asistente de agendamiento. Los pasos 1 y 2 (barbería y barbero) viven en el
-// inicio del cliente; aquí están el paso 3 (procedimientos) y el 4 (fecha y hora).
+// inicio del cliente; aquí están el paso 3 (procedimientos), el 4 (fecha y hora)
+// y el 5 (confirmar). La cita nace pendiente: el barbero la acepta o la rechaza.
 export function AgendarCitaScreen({
   barbero,
   onBack,
+  onDone,
 }: {
   barbero: BarberoElegido;
   onBack: () => void;
+  onDone: () => void;
 }) {
   const [data, setData] = useState<ProcedimientosBarberoCliente | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [step, setStep] = useState<'procedimientos' | 'fecha'>('procedimientos');
+  const [step, setStep] = useState<'procedimientos' | 'fecha' | 'confirmar' | 'listo'>(
+    'procedimientos',
+  );
   const [disponibilidad, setDisponibilidad] = useState<DisponibilidadCliente | null>(null);
   const [loadingDias, setLoadingDias] = useState(false);
   const [errorDias, setErrorDias] = useState('');
   const [fecha, setFecha] = useState<string | null>(null);
   const [hora, setHora] = useState<string | null>(null);
+  const [notas, setNotas] = useState('');
+  const [sending, setSending] = useState(false);
+  const [errorSend, setErrorSend] = useState('');
+  const [creada, setCreada] = useState<CitaCliente | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -55,8 +65,7 @@ export function AgendarCitaScreen({
 
   const procedimientos = data?.procedimientos ?? [];
 
-  const goToFecha = () => {
-    setStep('fecha');
+  const loadDias = () => {
     setFecha(null);
     setHora(null);
     setDisponibilidad(null);
@@ -72,8 +81,73 @@ export function AgendarCitaScreen({
       .finally(() => setLoadingDias(false));
   };
 
+  const goToFecha = () => {
+    setStep('fecha');
+    loadDias();
+  };
+
+  const submit = async () => {
+    if (!fecha || !hora || sending) return;
+
+    setSending(true);
+    setErrorSend('');
+
+    try {
+      const response = await api.post<{ message: string; cita: CitaCliente }>('/cliente/citas', {
+        idBarbero: barbero.id,
+        procedimientoIds: selectedIds,
+        fecha,
+        horaInicio: hora,
+        notas: notas.trim() || undefined,
+      });
+      setCreada(response.data.cita);
+      setStep('listo');
+    } catch (err) {
+      const message = readError(err, 'No fue posible solicitar la cita.');
+      const status = (err as { response?: { status?: number } })?.response?.status;
+
+      if (status === 409) {
+        // La hora se ocupó mientras confirmabas: se vuelve a elegir con horas frescas.
+        setStep('fecha');
+        loadDias();
+        setErrorDias(message);
+      } else {
+        setErrorSend(message);
+      }
+    } finally {
+      setSending(false);
+    }
+  };
+
   // Atrás en el paso 4 vuelve al 3 conservando los procedimientos elegidos.
-  const back = () => (step === 'fecha' ? setStep('procedimientos') : onBack());
+  const back = () => {
+    if (step === 'confirmar') setStep('fecha');
+    else if (step === 'fecha') setStep('procedimientos');
+    else onBack();
+  };
+
+  if (step === 'listo' && creada) {
+    return <ListoStep cita={creada} onDone={onDone} />;
+  }
+
+  if (step === 'confirmar' && disponibilidad && fecha && hora) {
+    return (
+      <ConfirmarStep
+        barbero={barbero}
+        costoTotal={disponibilidad.costoTotal}
+        duracionMinutos={disponibilidad.duracionMinutos}
+        error={errorSend}
+        fecha={fecha}
+        hora={hora}
+        notas={notas}
+        procedimientos={procedimientos.filter((item) => selectedIds.includes(item.id))}
+        sending={sending}
+        onBack={back}
+        onChangeNotas={setNotas}
+        onSubmit={submit}
+      />
+    );
+  }
 
   if (step === 'fecha') {
     return (
@@ -88,6 +162,10 @@ export function AgendarCitaScreen({
         onSelectFecha={(value) => {
           setFecha(value);
           setHora(null);
+        }}
+        onContinue={() => {
+          setErrorSend('');
+          setStep('confirmar');
         }}
         onSelectHora={setHora}
       />
@@ -154,6 +232,7 @@ function FechaStep({
   hora,
   loading,
   onBack,
+  onContinue,
   onSelectFecha,
   onSelectHora,
 }: {
@@ -164,6 +243,7 @@ function FechaStep({
   hora: string | null;
   loading: boolean;
   onBack: () => void;
+  onContinue: () => void;
   onSelectFecha: (fecha: string) => void;
   onSelectHora: (hora: string) => void;
 }) {
@@ -226,12 +306,122 @@ function FechaStep({
           ) : null}
 
           {fecha && hora ? (
-            <Text style={styles.selection}>
-              Elegiste: {formatShortDate(fecha)}, {hora}
-            </Text>
+            <View>
+              <Text style={styles.selection}>
+                Elegiste: {formatShortDate(fecha)}, {hora}
+              </Text>
+              <Pressable style={styles.primaryButton} onPress={onContinue}>
+                <Text style={styles.primaryButtonText}>Continuar</Text>
+              </Pressable>
+            </View>
           ) : null}
         </View>
       ) : null}
+    </View>
+  );
+}
+
+// Paso 5: resumen con duración y costo total antes de solicitar.
+function ConfirmarStep({
+  barbero,
+  costoTotal,
+  duracionMinutos,
+  error,
+  fecha,
+  hora,
+  notas,
+  procedimientos,
+  sending,
+  onBack,
+  onChangeNotas,
+  onSubmit,
+}: {
+  barbero: BarberoElegido;
+  costoTotal: number;
+  duracionMinutos: number;
+  error: string;
+  fecha: string;
+  hora: string;
+  notas: string;
+  procedimientos: EspecialidadCliente[];
+  sending: boolean;
+  onBack: () => void;
+  onChangeNotas: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <View>
+      <Pressable onPress={onBack} style={styles.backButton}>
+        <Text style={styles.backText}>← Cambiar fecha u hora</Text>
+      </Pressable>
+
+      <Text style={styles.kicker}>Agendar cita con {barbero.nombre}</Text>
+      <Text style={styles.title}>Confirma tu cita</Text>
+
+      <View style={styles.summary}>
+        <SummaryRow label="Barbero" value={barbero.nombre} />
+        <SummaryRow label="Fecha" value={formatShortDate(fecha)} />
+        <SummaryRow label="Hora de inicio" value={hora} />
+        <SummaryRow label="Servicios" value={procedimientos.map((item) => item.nombre).join(', ')} />
+        <SummaryRow label="Duración estimada" value={`${duracionMinutos} min`} />
+        <SummaryRow label="Total" value={formatMoney(costoTotal)} strong />
+      </View>
+
+      <Text style={styles.sectionLabel}>Notas para el barbero (opcional)</Text>
+      <TextInput
+        maxLength={300}
+        multiline
+        placeholder="Ej: prefiero el corte más corto a los lados"
+        placeholderTextColor={colors.muted}
+        style={styles.notes}
+        value={notas}
+        onChangeText={onChangeNotas}
+      />
+
+      <Text style={styles.hint}>
+        Tu cita queda pendiente hasta que el barbero la acepte. Te avisaremos cuando responda.
+      </Text>
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <Pressable
+        disabled={sending}
+        style={[styles.primaryButton, sending && styles.disabled]}
+        onPress={onSubmit}
+      >
+        <Text style={styles.primaryButtonText}>{sending ? 'Enviando...' : 'Solicitar cita'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function SummaryRow({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={[styles.summaryValue, strong && styles.summaryStrong]}>{value}</Text>
+    </View>
+  );
+}
+
+function ListoStep({ cita, onDone }: { cita: CitaCliente; onDone: () => void }) {
+  return (
+    <View>
+      <Text style={styles.kicker}>Solicitud enviada</Text>
+      <Text style={styles.title}>Espera la confirmación</Text>
+      <Text style={styles.hint}>
+        {cita.barbero.nombre} recibió tu solicitud para el {formatShortDate(cita.fecha)} a las{' '}
+        {cita.horaInicio}. La cita queda como {cita.estadoLabel.toLowerCase()} hasta que la acepte
+        o la rechace.
+      </Text>
+      <View style={styles.summary}>
+        <SummaryRow label="Servicios" value={cita.procedimientos.map((item) => item.nombre).join(', ')} />
+        <SummaryRow label="Duración" value={`${cita.duracionMinutos} min`} />
+        <SummaryRow label="Total" value={formatMoney(cita.costoTotal)} strong />
+      </View>
+      <Pressable style={styles.primaryButton} onPress={onDone}>
+        <Text style={styles.primaryButtonText}>Volver al inicio</Text>
+      </Pressable>
     </View>
   );
 }
@@ -319,6 +509,33 @@ const styles = StyleSheet.create({
     fontSize: 19,
     marginBottom: 8,
     marginTop: 12,
+  },
+  summary: {
+    backgroundColor: colors.white,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    marginBottom: 8,
+    maxWidth: 680,
+    padding: 16,
+  },
+  summaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' },
+  summaryLabel: { color: colors.muted, fontFamily: fonts.medium, fontSize: 17 },
+  summaryValue: { color: colors.black, flexShrink: 1, fontFamily: fonts.title, fontSize: 18, textAlign: 'right' },
+  summaryStrong: { color: colors.darkGold, fontSize: 22 },
+  notes: {
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: colors.black,
+    fontFamily: fonts.medium,
+    fontSize: 18,
+    marginBottom: 12,
+    maxWidth: 680,
+    minHeight: 84,
+    padding: 12,
+    textAlignVertical: 'top',
   },
   pillWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pill: {

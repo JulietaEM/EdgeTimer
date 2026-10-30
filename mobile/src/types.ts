@@ -254,3 +254,21 @@ export interface DisponibilidadCliente {
   hasta: string;
   dias: { fecha: string; horas: string[] }[];
 }
+
+// ---- Cliente: confirmar y solicitar la cita (HU-20) ----
+
+export interface CitaCliente {
+  id: string;
+  estado: EstadoCita;
+  estadoLabel: string;
+  fecha: string;
+  horaInicio: string;
+  horaFin: string;
+  duracionMinutos: number;
+  costoTotal: number;
+  notas: string;
+  motivo: string | null;
+  barbero: { id: string; nombre: string; foto: string | null };
+  barberia: { id: string; nombre: string; direccion: string };
+  procedimientos: { id: string; nombre: string; precio: number; duracionMinutos: number }[];
+}

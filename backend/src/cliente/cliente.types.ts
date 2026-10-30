@@ -91,3 +91,45 @@ export interface DisponibilidadView {
   hasta: string;
   dias: { fecha: string; horas: string[] }[];
 }
+
+export type EstadoCitaCliente =
+  | 'pendiente'
+  | 'confirmada'
+  | 'realizada'
+  | 'cancelada'
+  | 'rechazada';
+
+/** Datos para solicitar una cita (paso 5: confirmar). */
+export interface CrearCitaDto {
+  idBarbero: string;
+  procedimientoIds: string[];
+  /** AAAA-MM-DD */
+  fecha: string;
+  /** HH:MM, una de las horas que devolvió la disponibilidad. */
+  horaInicio: string;
+  notas?: string;
+}
+
+/** Una cita vista por el cliente. */
+export interface CitaClienteView {
+  id: string;
+  estado: EstadoCitaCliente;
+  /** "Vencida" cuando la solicitud nunca fue respondida. */
+  estadoLabel: string;
+  fecha: string;
+  horaInicio: string;
+  horaFin: string;
+  duracionMinutos: number;
+  costoTotal: number;
+  notas: string;
+  /** Motivo de una cancelación o rechazo, si lo hay. */
+  motivo: string | null;
+  barbero: { id: string; nombre: string; foto: string | null };
+  barberia: { id: string; nombre: string; direccion: string };
+  procedimientos: {
+    id: string;
+    nombre: string;
+    precio: number;
+    duracionMinutos: number;
+  }[];
+}
