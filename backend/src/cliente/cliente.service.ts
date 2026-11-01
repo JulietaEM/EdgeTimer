@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { isUuid } from '../admin/admin.utils';
@@ -10,7 +11,18 @@ import { optionalText } from '../auth/auth.validation';
 import { bogotaDate, bogotaHour, toInstant } from '../barbero/barbero.utils';
 import type { AuthUser } from '../common/auth/auth-user';
 import { mapCitaError } from '../common/cita-errors';
-import { EXPIRED_REASON } from '../common/maintenance';
+import { loadFreeDays, loadSchedules } from '../common/disponibilidad';
+import {
+  aceptar,
+  loadPendientes,
+  propuestaVigente,
+  proponer,
+  rechazar,
+  retirar,
+  toPropuestaView,
+  type PropuestaRow,
+} from '../common/reprogramacion';
+import { EXPIRED_REASON, markPastCitas } from '../common/maintenance';
 import { first, type One } from '../common/postgrest';
 import {
   createSupabaseUserClient,
@@ -22,8 +34,11 @@ import type {
   BarberoListItem,
   BarberoPerfilView,
   CitaClienteView,
+  CitasClienteQuery,
   CrearCitaDto,
   EstadoCitaCliente,
+  MotivoCitaDto,
+  ReprogramarCitaDto,
   DisponibilidadQuery,
   DisponibilidadView,
   EspecialidadView,
@@ -31,19 +46,17 @@ import type {
 } from './cliente.types';
 import {
   addDays,
-  computeFreeSlots,
   firstName,
   parseDateRange,
   parseProcedimientoIds,
   summarizeSchedule,
-  type BusyRange,
-  type ScheduleBlock,
 } from './cliente.utils';
 
 const BARBERIA_SELECT =
   'id_barberia, nombre, descripcion, direccion, telefono, logo_url';
 
 const MAX_RESENAS = 10;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const CITA_SELECT = `
   id_cita,
@@ -119,6 +132,20 @@ interface CitaRow {
   }[];
 }
 
+/** Lo mínimo de una cita para decidir si se puede cancelar o reprogramar. */
+interface CitaPropiaRow {
+  id_cita: string;
+  id_barbero: string;
+  id_cliente: string;
+  estado: EstadoCitaCliente;
+  inicio_at: string;
+  fin_at: string;
+  cita_procedimiento?: {
+    precio_aplicado: number | string;
+    duracion_minutos_aplicada: number;
+  }[];
+}
+
 interface ProcedimientosRow extends Pick<BarberoRow, 'barbero_procedimiento'> {
   id_barberia: string;
   barberia: One<{ activo: boolean }>;
@@ -126,13 +153,6 @@ interface ProcedimientosRow extends Pick<BarberoRow, 'barbero_procedimiento'> {
 
 interface PerfilRow extends BarberoRow {
   barberia: One<BarberiaRow & { activo: boolean }>;
-}
-
-interface DisponibilidadRow {
-  id_barbero: string;
-  dia_semana: number;
-  hora_inicio: string;
-  hora_fin: string;
 }
 
 interface ResenaRow {
@@ -150,6 +170,8 @@ interface ResenaRow {
  */
 @Injectable()
 export class ClienteService {
+  private readonly logger = new Logger(ClienteService.name);
+
   // ---------------------------------------------------------------------
   // HU-17: elegir barbería y barbero
   // ---------------------------------------------------------------------
@@ -248,9 +270,7 @@ export class ClienteService {
     }
 
     const rows = (data ?? []) as unknown as BarberoRow[];
-    const schedules = await this.loadSchedules(
-      rows.map((row) => row.id_barbero),
-    );
+    const schedules = await loadSchedules(rows.map((row) => row.id_barbero));
 
     return Promise.all(
       rows.map(async (row) => {
@@ -306,7 +326,7 @@ export class ClienteService {
     }
 
     const [schedules, resenas] = await Promise.all([
-      this.loadSchedules([id]),
+      loadSchedules([id]),
       this.loadResenas(id),
     ]);
     const horarioResumen = summarizeSchedule(schedules.get(id) ?? []);
@@ -403,59 +423,90 @@ export class ClienteService {
     barberoId: string,
     query: DisponibilidadQuery,
   ): Promise<DisponibilidadView> {
-    const ids = parseProcedimientoIds(query?.procedimientos);
     const now = this.now();
     const { desde, dias } = parseDateRange(query ?? {}, now);
     const excluirCita = this.parseExcluirCita(query?.excluirCita);
+    const sinProcedimientos =
+      typeof query?.procedimientos !== 'string' ||
+      query.procedimientos.trim() === '';
 
-    // También comprueba que el barbero y su barbería existan y estén activos.
-    const { procedimientos } = await this.listProcedimientos(barberoId);
-    const elegidos = ids.map((id) =>
-      procedimientos.find((item) => item.id === id),
-    );
+    let duracionMinutos: number;
+    let costoTotal: number;
 
-    if (elegidos.some((item) => !item)) {
-      throw new BadRequestException(
-        'Alguno de los procedimientos no lo ofrece este barbero',
+    if (sinProcedimientos && excluirCita) {
+      // Reprogramar: se conserva la duración con la que se agendó la cita.
+      await this.listProcedimientos(barberoId); // 404 si el barbero ya no está activo
+      const cita = await this.findCitaPropia(user, excluirCita);
+
+      if (cita.id_barbero !== barberoId) {
+        throw new BadRequestException('Esa cita no es con este barbero');
+      }
+
+      this.ensureAbierta(cita);
+      ({ duracionMinutos, costoTotal } = this.totalesCita(cita));
+    } else {
+      const ids = parseProcedimientoIds(query?.procedimientos);
+
+      // También comprueba que el barbero y su barbería existan y estén activos.
+      const { procedimientos } = await this.listProcedimientos(barberoId);
+      const elegidos = ids.map((id) =>
+        procedimientos.find((item) => item.id === id),
+      );
+
+      if (elegidos.some((item) => !item)) {
+        throw new BadRequestException(
+          'Alguno de los procedimientos no lo ofrece este barbero',
+        );
+      }
+
+      duracionMinutos = elegidos.reduce(
+        (total, item) => total + (item?.duracionMinutos ?? 0),
+        0,
+      );
+      costoTotal = elegidos.reduce(
+        (total, item) => total + (item?.precio ?? 0),
+        0,
       );
     }
 
-    const duracionMinutos = elegidos.reduce(
-      (total, item) => total + (item?.duracionMinutos ?? 0),
-      0,
-    );
-    const costoTotal = elegidos.reduce(
-      (total, item) => total + (item?.precio ?? 0),
-      0,
-    );
-    const hasta = addDays(desde, dias - 1);
-    const base = { duracionMinutos, costoTotal, desde, hasta };
+    return this.freeSlots(user, barberoId, {
+      duracionMinutos,
+      costoTotal,
+      desde,
+      dias,
+      excluirCita,
+      now,
+    });
+  }
 
-    const schedule =
-      (await this.loadSchedules([barberoId])).get(barberoId) ?? [];
-    if (schedule.length === 0) {
-      return { ...base, dias: [] };
-    }
-
-    const windowEnd = new Date(`${addDays(desde, dias)}T00:00:00-05:00`);
-    const [barberoBusy, clienteBusy] = await Promise.all([
-      this.loadBusy('id_barbero', barberoId, now, windowEnd, excluirCita),
-      this.loadBusy('id_cliente', user.profileId, now, windowEnd, excluirCita),
-    ]);
+  /** Horas libres de un barbero para una cita de esa duración (ver `loadFreeDays`). */
+  private async freeSlots(
+    user: AuthUser,
+    barberoId: string,
+    input: {
+      duracionMinutos: number;
+      costoTotal: number;
+      desde: string;
+      dias: number;
+      excluirCita: string | null;
+      now: Date;
+    },
+  ): Promise<DisponibilidadView> {
+    const { duracionMinutos, costoTotal, desde, dias } = input;
 
     return {
-      ...base,
-      dias: computeFreeSlots({
-        blocks: schedule.map((block) => ({
-          dia: block.dia,
-          inicio: this.toMinutes(block.inicio),
-          fin: this.toMinutes(block.fin),
-        })),
-        busy: [...barberoBusy, ...clienteBusy],
+      duracionMinutos,
+      costoTotal,
+      desde,
+      hasta: addDays(desde, dias - 1),
+      dias: await loadFreeDays({
+        barberoId,
+        clienteId: user.profileId,
+        duracionMinutos,
         desde,
         dias,
-        duracionMinutos,
-        now,
+        excluirCita: input.excluirCita,
+        now: input.now,
       }),
     };
   }
@@ -573,10 +624,284 @@ export class ClienteService {
       throw new NotFoundException('No se encontró la cita');
     }
 
-    return this.toCitaView(data);
+    return this.toCitaView(data, (await loadPendientes([id])).get(id));
   }
 
-  private async toCitaView(row: CitaRow): Promise<CitaClienteView> {
+  // ---------------------------------------------------------------------
+  // HU-21: reprogramar o cancelar con 1 día de antelación
+  // ---------------------------------------------------------------------
+
+  /** Citas abiertas del cliente que aún no terminan (el historial llega con HU-24). */
+  async listCitas(
+    user: AuthUser,
+    query: CitasClienteQuery,
+  ): Promise<CitaClienteView[]> {
+    if ((query?.grupo ?? 'proximas') !== 'proximas') {
+      throw new BadRequestException('El grupo de citas no es válido');
+    }
+
+    // Las solicitudes cuya hora ya pasó se vencen antes de listar.
+    await markPastCitas(this.logger);
+
+    const { data, error } = await supabaseAdmin
+      .from('cita')
+      .select(CITA_SELECT)
+      .eq('id_cliente', user.profileId)
+      .in('estado', ['pendiente', 'confirmada'])
+      .gte('fin_at', this.now().toISOString())
+      .order('inicio_at', { ascending: true });
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    const rows = (data ?? []) as unknown as CitaRow[];
+    const propuestas = await loadPendientes(rows.map((row) => row.id_cita));
+
+    return Promise.all(
+      rows.map((row) => this.toCitaView(row, propuestas.get(row.id_cita))),
+    );
+  }
+
+  async cancelarCita(user: AuthUser, id: string, dto: MotivoCitaDto) {
+    const motivo = optionalText(dto?.motivo, 200);
+    const cita = await this.findCitaPropia(user, id);
+    this.ensureModificable(cita);
+
+    await this.updateCita(user, id, {
+      estado: 'cancelada',
+      motivo_estado: motivo,
+    });
+
+    return { message: 'Cita cancelada', cita: await this.getCita(user, id) };
+  }
+
+  /**
+   * Cambio de horario, conservando la duración con la que se agendó la cita.
+   * - Cita confirmada: no se mueve. Se envía una propuesta y la cita sigue en su
+   *   horario hasta que el barbero la acepte.
+   * - Solicitud pendiente: el barbero aún no se comprometió, así que se mueve
+   *   directo y sigue pendiente.
+   */
+  async reprogramarCita(user: AuthUser, id: string, dto: ReprogramarCitaDto) {
+    const cita = await this.findCitaPropia(user, id);
+    this.ensureModificable(cita);
+
+    const now = this.now();
+    const { duracionMinutos, costoTotal } = this.totalesCita(cita);
+    await this.listProcedimientos(cita.id_barbero); // 404 si el barbero ya no está activo
+
+    if (cita.estado === 'confirmada') {
+      await proponer({
+        actor: 'cliente',
+        cita,
+        duracionMinutos,
+        fecha: dto?.fecha,
+        horaInicio: dto?.horaInicio,
+        now,
+      });
+
+      return {
+        message:
+          'Propuesta enviada. Tu cita sigue en su horario actual hasta que el barbero acepte el cambio.',
+        cita: await this.getCita(user, id),
+      };
+    }
+
+    const inicio = toInstant(dto?.fecha, dto?.horaInicio);
+
+    if (inicio.getTime() <= now.getTime()) {
+      throw new BadRequestException(
+        'No se puede programar en una fecha u hora pasada',
+      );
+    }
+
+    if (inicio.getTime() === new Date(cita.inicio_at).getTime()) {
+      throw new BadRequestException('Elige una hora distinta a la actual');
+    }
+
+    // La hora se vuelve a comprobar justo antes de guardar. La propia cita no
+    // ocupa su horario actual, así que se puede mover a un tramo contiguo.
+    const disponibilidad = await this.freeSlots(user, cita.id_barbero, {
+      duracionMinutos,
+      costoTotal,
+      desde: dto.fecha,
+      dias: 1,
+      excluirCita: id,
+      now,
+    });
+    const libre = disponibilidad.dias
+      .find((dia) => dia.fecha === dto.fecha)
+      ?.horas.includes(dto.horaInicio);
+
+    if (!libre) {
+      throw new ConflictException('Esa hora ya no está disponible. Elige otra');
+    }
+
+    await this.updateCita(user, id, {
+      inicio_at: inicio.toISOString(),
+      fin_at: new Date(
+        inicio.getTime() + duracionMinutos * 60_000,
+      ).toISOString(),
+    });
+
+    return {
+      message: 'Cita reprogramada',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** El barbero propuso otro horario y el cliente lo acepta: la cita se mueve. */
+  async aceptarPropuesta(user: AuthUser, id: string) {
+    const cita = await this.findCitaPropia(user, id);
+
+    await aceptar({
+      user,
+      actor: 'cliente',
+      cita,
+      duracionMinutos: this.totalesCita(cita).duracionMinutos,
+      now: this.now(),
+    });
+
+    return {
+      message: 'Aceptaste el nuevo horario. Tu cita fue reprogramada.',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** El cliente rechaza la propuesta del barbero: la cita sigue como estaba. */
+  async rechazarPropuesta(user: AuthUser, id: string) {
+    const cita = await this.findCitaPropia(user, id);
+    await rechazar('cliente', cita);
+
+    return {
+      message: 'Rechazaste el cambio. Tu cita sigue en su horario original.',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** El cliente retira su propia propuesta. */
+  async retirarPropuesta(user: AuthUser, id: string) {
+    const cita = await this.findCitaPropia(user, id);
+    await retirar('cliente', cita);
+
+    return {
+      message: 'Propuesta retirada.',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** Una cita solo se toca si es de este cliente. */
+  private async findCitaPropia(
+    user: AuthUser,
+    id: string,
+  ): Promise<CitaPropiaRow> {
+    if (!isUuid(id)) {
+      throw new NotFoundException('No se encontró la cita');
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('cita')
+      .select(
+        `
+          id_cita,
+          id_barbero,
+          id_cliente,
+          estado,
+          inicio_at,
+          fin_at,
+          cita_procedimiento(precio_aplicado, duracion_minutos_aplicada)
+        `,
+      )
+      .eq('id_cita', id)
+      .eq('id_cliente', user.profileId)
+      .maybeSingle();
+
+    if (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+
+    if (!data) {
+      throw new NotFoundException('No se encontró la cita');
+    }
+
+    return data;
+  }
+
+  private ensureAbierta(cita: CitaPropiaRow) {
+    if (cita.estado !== 'pendiente' && cita.estado !== 'confirmada') {
+      throw new ConflictException('Esta cita ya no se puede modificar');
+    }
+  }
+
+  /** Abierta y con al menos 1 día de antelación (la base lo exige también). */
+  private ensureModificable(cita: CitaPropiaRow) {
+    this.ensureAbierta(cita);
+
+    if (!this.canModify(cita.estado, cita.inicio_at)) {
+      throw new BadRequestException(
+        'Solo puedes cancelar o reprogramar citas con al menos 1 día de antelación',
+      );
+    }
+  }
+
+  private canModify(estado: EstadoCitaCliente, inicioAt: string) {
+    return (
+      (estado === 'pendiente' || estado === 'confirmada') &&
+      new Date(inicioAt).getTime() - this.now().getTime() >= DAY_MS
+    );
+  }
+
+  /** Precio y duración congelados al agendar. */
+  private totalesCita(cita: CitaPropiaRow) {
+    const items = cita.cita_procedimiento ?? [];
+    const duracionMinutos = items.reduce(
+      (total, item) => total + Number(item.duracion_minutos_aplicada ?? 0),
+      0,
+    );
+
+    if (duracionMinutos <= 0) {
+      throw new BadRequestException('La cita no tiene procedimientos válidos');
+    }
+
+    return {
+      duracionMinutos,
+      costoTotal: items.reduce(
+        (total, item) => total + Number(item.precio_aplicado ?? 0),
+        0,
+      ),
+    };
+  }
+
+  /** Cambia la cita con el token del cliente: la base valida estados y horarios. */
+  private async updateCita(
+    user: AuthUser,
+    id: string,
+    changes: Record<string, unknown>,
+  ) {
+    const { data, error } = await createSupabaseUserClient(user.accessToken)
+      .from('cita')
+      .update(changes)
+      .eq('id_cita', id)
+      .eq('id_cliente', user.profileId)
+      .select('id_cita')
+      .maybeSingle<{ id_cita: string }>();
+
+    if (error) {
+      throw mapCitaError(error.message, 'cliente');
+    }
+
+    if (!data) {
+      throw new ConflictException(
+        'La cita cambió y ya no se puede actualizar. Recarga la lista.',
+      );
+    }
+  }
+
+  private async toCitaView(
+    row: CitaRow,
+    propuesta?: PropuestaRow,
+  ): Promise<CitaClienteView> {
     // Precio y duración salen de las columnas congeladas al agendar.
     const procedimientos = (row.cita_procedimiento ?? []).map((item) => {
       const procedimiento = first(item.procedimiento);
@@ -609,6 +934,11 @@ export class ClienteService {
       ),
       notas: row.notas_cliente ?? '',
       motivo: row.motivo_estado,
+      puedeModificar: this.canModify(row.estado, row.inicio_at),
+      propuesta: toPropuestaView(
+        propuestaVigente(row, propuesta, this.now()),
+        'cliente',
+      ),
       barbero: {
         id: barbero?.id_barbero ?? '',
         nombre: barbero?.nombre_barbero ?? 'Barbero',
@@ -643,11 +973,6 @@ export class ClienteService {
     return new Date();
   }
 
-  private toMinutes(hora: string) {
-    const [hours, minutes] = hora.split(':').map(Number);
-    return hours * 60 + minutes;
-  }
-
   private parseExcluirCita(value: unknown) {
     if (value === undefined || value === '') {
       return null;
@@ -658,35 +983,6 @@ export class ClienteService {
     }
 
     return value;
-  }
-
-  /** Citas activas (pendientes o confirmadas) que aún no terminan dentro de la ventana. */
-  private async loadBusy(
-    column: 'id_barbero' | 'id_cliente',
-    id: string,
-    now: Date,
-    windowEnd: Date,
-    excluirCita: string | null,
-  ): Promise<BusyRange[]> {
-    let request = supabaseAdmin
-      .from('cita')
-      .select('inicio_at, fin_at')
-      .eq(column, id)
-      .in('estado', ['pendiente', 'confirmada'])
-      .gt('fin_at', now.toISOString())
-      .lt('inicio_at', windowEnd.toISOString());
-
-    if (excluirCita) {
-      request = request.neq('id_cita', excluirCita);
-    }
-
-    const { data, error } = await request;
-
-    if (error) {
-      throw new InternalServerErrorException(error.message);
-    }
-
-    return data ?? [];
   }
 
   /** Solo las especialidades activas del barbero. */
@@ -708,36 +1004,6 @@ export class ClienteService {
       precio: Number(item.precio ?? 0),
       duracionMinutos: Number(item.duracion_minutos ?? 0),
     };
-  }
-
-  /** Tramos semanales activos, agrupados por barbero. */
-  private async loadSchedules(barberoIds: string[]) {
-    const result = new Map<string, ScheduleBlock[]>();
-    if (barberoIds.length === 0) {
-      return result;
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('disponibilidad_barbero')
-      .select('id_barbero, dia_semana, hora_inicio, hora_fin')
-      .in('id_barbero', barberoIds)
-      .eq('activo', true);
-
-    if (error) {
-      throw new InternalServerErrorException(error.message);
-    }
-
-    for (const row of (data ?? []) as unknown as DisponibilidadRow[]) {
-      const list = result.get(row.id_barbero) ?? [];
-      list.push({
-        dia: row.dia_semana,
-        inicio: row.hora_inicio.slice(0, 5),
-        fin: row.hora_fin.slice(0, 5),
-      });
-      result.set(row.id_barbero, list);
-    }
-
-    return result;
   }
 
   private async loadResenas(barberoId: string) {

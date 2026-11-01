@@ -77,4 +77,19 @@ export class BarberoController {
   ) {
     return this.barberoService.reprogramar(user, id, dto);
   }
+
+  @Patch('citas/:id/propuesta/aceptar')
+  aceptarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.barberoService.aceptarPropuesta(user, id);
+  }
+
+  @Patch('citas/:id/propuesta/rechazar')
+  rechazarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.barberoService.rechazarPropuesta(user, id);
+  }
+
+  @Patch('citas/:id/propuesta/retirar')
+  retirarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.barberoService.retirarPropuesta(user, id);
+  }
 }

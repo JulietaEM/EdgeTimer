@@ -907,4 +907,607 @@ describe('ClienteService (HU-17)', () => {
       expect(cita.barbero.nombre).toBe('Barbero');
     });
   });
+
+  describe('HU-21: reprogramar o cancelar', () => {
+    const CLIENTE_ID = '55555555-5555-4555-8555-555555555555';
+    const CITA_ID = '99999999-9999-4999-8999-999999999999';
+    const user = {
+      profileId: CLIENTE_ID,
+      role: 'cliente',
+      accessToken: 'token-del-cliente',
+    } as AuthUser;
+    // Miércoles 2026-10-28 12:00 en Bogotá.
+    const NOW = new Date('2026-10-28T17:00:00Z');
+
+    // Lunes 2026-11-02 08:00 Bogotá: faltan más de 4 días.
+    const rawCita = (overrides: Record<string, unknown> = {}) => ({
+      id_cita: CITA_ID,
+      id_barbero: BARBERO_ID,
+      estado: 'confirmada',
+      inicio_at: '2026-11-02T13:00:00Z',
+      fin_at: '2026-11-02T13:30:00Z',
+      cita_procedimiento: [
+        { precio_aplicado: '27000', duracion_minutos_aplicada: 30 },
+      ],
+      ...overrides,
+    });
+    const viewRow = (overrides: Record<string, unknown> = {}) => ({
+      id_cita: CITA_ID,
+      estado: 'confirmada',
+      inicio_at: '2026-11-02T13:00:00Z',
+      fin_at: '2026-11-02T13:30:00Z',
+      notas_cliente: null,
+      motivo_estado: null,
+      barbero: {
+        id_barbero: BARBERO_ID,
+        nombre_barbero: 'Carlos',
+        foto_perfil: null,
+      },
+      barberia: {
+        id_barberia: BARBERIA_ID,
+        nombre: 'AlphaCorte',
+        direccion: null,
+      },
+      cita_procedimiento: [
+        {
+          precio_aplicado: '27000',
+          duracion_minutos_aplicada: 30,
+          procedimiento: { id_procedimiento: 'p1', nombre: 'Corte clásico' },
+        },
+      ],
+      ...overrides,
+    });
+    const barbero = {
+      id_barberia: BARBERIA_ID,
+      barberia: { activo: true },
+      barbero_procedimiento: [{ procedimiento: corte }],
+    };
+    const lunes = [
+      {
+        id_barbero: BARBERO_ID,
+        dia_semana: 1,
+        hora_inicio: '08:00:00',
+        hora_fin: '10:00:00',
+      },
+    ];
+
+    beforeEach(() => {
+      jest
+        .spyOn(service as unknown as { now: () => Date }, 'now')
+        .mockReturnValue(NOW);
+    });
+
+    describe('disponibilidad para reprogramar (excluirCita sin procedimientos)', () => {
+      const query = { excluirCita: CITA_ID, desde: '2026-11-02', dias: '1' };
+
+      it('usa la duración congelada de la cita y no la cuenta a ella como ocupada', async () => {
+        const calls = fakeDatabase({
+          barbero: { data: barbero },
+          disponibilidad_barbero: { data: lunes },
+          cita: [{ data: rawCita() }, { data: [] }, { data: [] }],
+        });
+
+        const result = await service.getDisponibilidad(user, BARBERO_ID, query);
+
+        expect(result.duracionMinutos).toBe(30);
+        expect(result.costoTotal).toBe(27000);
+        expect(result.dias[0].horas).toContain('08:00'); // su propio horario sigue libre
+        expect(
+          calls.filter(
+            (call) => call.method === 'neq' && call.args[1] === CITA_ID,
+          ),
+        ).toHaveLength(2);
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'eq',
+          args: ['id_cliente', CLIENTE_ID],
+        });
+      });
+
+      it('da 404 si la cita no es de este cliente', async () => {
+        fakeDatabase({ barbero: { data: barbero }, cita: { data: null } });
+
+        await expect(
+          service.getDisponibilidad(user, BARBERO_ID, query),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('rechaza una cita de otro barbero o que ya no está abierta', async () => {
+        fakeDatabase({
+          barbero: { data: barbero },
+          cita: { data: rawCita({ id_barbero: 'otro' }) },
+        });
+        await expect(
+          service.getDisponibilidad(user, BARBERO_ID, query),
+        ).rejects.toBeInstanceOf(BadRequestException);
+
+        jest.restoreAllMocks();
+        jest
+          .spyOn(service as unknown as { now: () => Date }, 'now')
+          .mockReturnValue(NOW);
+        fakeDatabase({
+          barbero: { data: barbero },
+          cita: { data: rawCita({ estado: 'cancelada' }) },
+        });
+        await expect(
+          service.getDisponibilidad(user, BARBERO_ID, query),
+        ).rejects.toBeInstanceOf(ConflictException);
+      });
+
+      it('sin procedimientos ni excluirCita sigue pidiendo procedimientos', async () => {
+        const calls = fakeDatabase({});
+
+        await expect(
+          service.getDisponibilidad(user, BARBERO_ID, { desde: '2026-11-02' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(calls).toHaveLength(0);
+      });
+    });
+
+    describe('listCitas', () => {
+      it('solo acepta el grupo "proximas" por ahora', async () => {
+        const calls = fakeDatabase({});
+
+        await expect(
+          service.listCitas(user, { grupo: 'historial' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(calls).toHaveLength(0);
+      });
+
+      it('vence solicitudes antes de listar y trae solo las abiertas de este cliente', async () => {
+        const rpc = jest
+          .spyOn(supabase.supabaseAdmin, 'rpc')
+          .mockResolvedValue({ error: null } as never);
+        const calls = fakeDatabase({
+          cita: {
+            data: [
+              viewRow(),
+              viewRow({
+                id_cita: 'c2',
+                estado: 'pendiente',
+                inicio_at: '2026-10-29T10:00:00Z', // mañana: ya no se puede modificar
+                fin_at: '2026-10-29T10:30:00Z',
+              }),
+            ],
+          },
+        });
+
+        const result = await service.listCitas(user, {});
+
+        expect(rpc).toHaveBeenCalledWith('vencer_solicitudes');
+        expect(rpc).toHaveBeenCalledWith('realizar_citas_vencidas');
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'eq',
+          args: ['id_cliente', CLIENTE_ID],
+        });
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'in',
+          args: ['estado', ['pendiente', 'confirmada']],
+        });
+        expect(result.map((cita) => cita.puedeModificar)).toEqual([
+          true,
+          false,
+        ]);
+      });
+    });
+
+    describe('cancelarCita', () => {
+      it('cancela con el token del cliente y guarda el motivo recortado', async () => {
+        fakeDatabase({
+          cita: [
+            { data: rawCita() },
+            {
+              data: viewRow({
+                estado: 'cancelada',
+                motivo_estado: 'Imprevisto',
+              }),
+            },
+          ],
+        });
+        const { calls, spy } = fakeUserClient({
+          cita: { data: { id_cita: CITA_ID } },
+        });
+
+        const result = await service.cancelarCita(user, CITA_ID, {
+          motivo: '  Imprevisto  ',
+        });
+
+        expect(spy).toHaveBeenCalledWith('token-del-cliente');
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'update',
+          args: [{ estado: 'cancelada', motivo_estado: 'Imprevisto' }],
+        });
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'eq',
+          args: ['id_cliente', CLIENTE_ID],
+        });
+        expect(result.message).toBe('Cita cancelada');
+        expect(result.cita.estado).toBe('cancelada');
+        expect(result.cita.puedeModificar).toBe(false);
+      });
+
+      it('con menos de 1 día de antelación responde 400 sin escribir', async () => {
+        fakeDatabase({
+          cita: {
+            data: rawCita({
+              inicio_at: '2026-10-29T10:00:00Z',
+              fin_at: '2026-10-29T10:30:00Z',
+            }),
+          },
+        });
+        const { spy } = fakeUserClient({});
+
+        await expect(service.cancelarCita(user, CITA_ID, {})).rejects.toThrow(
+          'al menos 1 día de antelación',
+        );
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('no cancela una cita que ya no está abierta ni una ajena', async () => {
+        fakeDatabase({ cita: { data: rawCita({ estado: 'realizada' }) } });
+        await expect(
+          service.cancelarCita(user, CITA_ID, {}),
+        ).rejects.toBeInstanceOf(ConflictException);
+
+        jest.restoreAllMocks();
+        jest
+          .spyOn(service as unknown as { now: () => Date }, 'now')
+          .mockReturnValue(NOW);
+        fakeDatabase({ cita: { data: null } });
+        await expect(
+          service.cancelarCita(user, CITA_ID, {}),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          service.cancelarCita(user, 'x', {}),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('si la cita cambió entre la lectura y la escritura responde 409', async () => {
+        fakeDatabase({ cita: { data: rawCita() } });
+        fakeUserClient({ cita: { data: null } });
+
+        await expect(
+          service.cancelarCita(user, CITA_ID, {}),
+        ).rejects.toBeInstanceOf(ConflictException);
+      });
+
+      it('traduce los errores de la base para el cliente', async () => {
+        fakeDatabase({ cita: { data: rawCita() } });
+        fakeUserClient({
+          cita: { error: { message: 'minimo 1 dia de anticipacion' } },
+        });
+
+        await expect(
+          service.cancelarCita(user, CITA_ID, {}),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+    });
+
+    describe('reprogramarCita', () => {
+      const propuestaDelCliente = {
+        id_propuesta: '77777777-7777-4777-8777-777777777777',
+        id_cita: CITA_ID,
+        propuesta_por: 'cliente',
+        inicio_at: '2026-11-02T14:00:00Z',
+        fin_at: '2026-11-02T14:30:00Z',
+        estado: 'pendiente',
+      };
+      // Misma jornada de lunes; la cita actual es a las 08:00 y el nuevo horario a las 09:00.
+      const dto = { fecha: '2026-11-02', horaInicio: '09:00' };
+      const adminDb = (current: unknown, busy: unknown[] = []) => ({
+        barbero: { data: barbero },
+        disponibilidad_barbero: { data: lunes },
+        cita: [
+          { data: current },
+          { data: busy },
+          { data: busy },
+          { data: viewRow({ estado: 'pendiente' }) },
+        ],
+      });
+
+      it('una cita confirmada NO se mueve: se envía una propuesta al barbero', async () => {
+        const adminCalls = fakeDatabase({
+          ...adminDb(rawCita()),
+          // La cita sigue confirmada al releerla: solo hay una propuesta.
+          cita: [
+            { data: rawCita() },
+            { data: [] },
+            { data: [] },
+            { data: viewRow() },
+          ],
+          propuesta_reprogramacion: [
+            { data: [] }, // no hay propuesta pendiente
+            { error: null }, // insert de la propuesta
+            { data: [propuestaDelCliente] }, // la que ve el cliente al releer
+          ],
+        });
+        const { spy } = fakeUserClient({});
+
+        const result = await service.reprogramarCita(user, CITA_ID, dto);
+
+        expect(adminCalls).toContainEqual({
+          table: 'propuesta_reprogramacion',
+          method: 'insert',
+          args: [
+            {
+              id_cita: CITA_ID,
+              propuesta_por: 'cliente',
+              inicio_at: '2026-11-02T14:00:00.000Z', // 09:00 Bogotá
+              fin_at: '2026-11-02T14:30:00.000Z', // misma duración de 30 min
+              estado: 'pendiente',
+            },
+          ],
+        });
+        // La cita sigue en su horario original: no se escribe en `cita`.
+        expect(spy).not.toHaveBeenCalled();
+        expect(
+          adminCalls.some((c) => c.table === 'cita' && c.method === 'update'),
+        ).toBe(false);
+        expect(result.message).toContain('Propuesta enviada');
+        expect(result.cita.propuesta).toMatchObject({
+          propuestaPor: 'cliente',
+          esPropia: true,
+          puedeResponder: false,
+          fecha: '2026-11-02',
+          horaInicio: '09:00',
+        });
+        // La propia cita no cuenta como ocupada al buscar la nueva hora.
+        expect(
+          adminCalls.filter(
+            (call) => call.method === 'neq' && call.args[1] === CITA_ID,
+          ),
+        ).toHaveLength(2);
+      });
+
+      it('una solicitud pendiente sigue pendiente (no se manda estado)', async () => {
+        fakeDatabase(adminDb(rawCita({ estado: 'pendiente' })));
+        const { calls } = fakeUserClient({
+          cita: { data: { id_cita: CITA_ID } },
+        });
+
+        const result = await service.reprogramarCita(user, CITA_ID, dto);
+
+        const update = calls.find((call) => call.method === 'update');
+        expect(update?.args[0]).not.toHaveProperty('estado');
+        expect(result.message).toBe('Cita reprogramada');
+      });
+
+      it('no deja reprogramar a una hora ocupada: 409 sin escribir', async () => {
+        fakeDatabase(
+          adminDb(rawCita(), [
+            {
+              inicio_at: '2026-11-02T14:00:00Z',
+              fin_at: '2026-11-02T14:30:00Z',
+            },
+          ]),
+        );
+        const { spy } = fakeUserClient({});
+
+        await expect(
+          service.reprogramarCita(user, CITA_ID, dto),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('con menos de 1 día de antelación responde 400', async () => {
+        fakeDatabase(
+          adminDb(
+            rawCita({
+              inicio_at: '2026-10-29T10:00:00Z',
+              fin_at: '2026-10-29T10:30:00Z',
+            }),
+          ),
+        );
+        const { spy } = fakeUserClient({});
+
+        await expect(
+          service.reprogramarCita(user, CITA_ID, dto),
+        ).rejects.toThrow('al menos 1 día de antelación');
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('rechaza la misma hora, una hora pasada y datos mal formados', async () => {
+        const cases = [
+          [{ fecha: '2026-11-02', horaInicio: '08:00' }, 'hora distinta'],
+          [{ fecha: '2026-10-26', horaInicio: '09:00' }, 'fecha u hora pasada'],
+          [{ fecha: '2026-11-02', horaInicio: '09:10' }, ''],
+        ] as const;
+
+        for (const [body, message] of cases) {
+          // El fake entrega las respuestas en orden: se reinstala en cada intento.
+          fakeDatabase(adminDb(rawCita()));
+          const attempt = service.reprogramarCita(user, CITA_ID, { ...body });
+
+          await expect(attempt).rejects.toBeInstanceOf(BadRequestException);
+          if (message) {
+            await expect(attempt).rejects.toThrow(message);
+          }
+        }
+      });
+
+      it('si la base rechaza el cambio lo traduce para el cliente', async () => {
+        fakeDatabase(adminDb(rawCita({ estado: 'pendiente' })));
+        fakeUserClient({
+          cita: {
+            error: {
+              message:
+                'No tienes permisos para hacer esta transicion de estado',
+            },
+          },
+        });
+
+        await expect(
+          service.reprogramarCita(user, CITA_ID, dto),
+        ).rejects.toThrow('No tienes permisos para este cambio');
+      });
+    });
+
+    describe('propuestas del barbero', () => {
+      const propuestaDelBarbero = {
+        id_propuesta: '77777777-7777-4777-8777-777777777777',
+        id_cita: CITA_ID,
+        propuesta_por: 'barbero',
+        inicio_at: '2026-11-02T14:00:00Z',
+        fin_at: '2026-11-02T14:30:00Z',
+        estado: 'pendiente',
+      };
+      const claimed = {
+        data: { id_propuesta: propuestaDelBarbero.id_propuesta },
+      };
+
+      it('la agenda muestra la propuesta del barbero para que el cliente responda', async () => {
+        jest
+          .spyOn(supabase.supabaseAdmin, 'rpc')
+          .mockResolvedValue({ error: null } as never);
+        fakeDatabase({
+          cita: { data: [viewRow()] },
+          propuesta_reprogramacion: { data: [propuestaDelBarbero] },
+        });
+
+        const [cita] = await service.listCitas(user, {});
+
+        expect(cita.propuesta).toMatchObject({
+          propuestaPor: 'barbero',
+          esPropia: false,
+          puedeResponder: true,
+          fecha: '2026-11-02',
+          horaInicio: '09:00',
+          horaFin: '09:30',
+        });
+      });
+
+      it('no muestra una propuesta cuando faltan menos de 24 h o la cita ya no está confirmada', async () => {
+        jest
+          .spyOn(supabase.supabaseAdmin, 'rpc')
+          .mockResolvedValue({ error: null } as never);
+        fakeDatabase({
+          cita: {
+            data: [
+              viewRow({
+                id_cita: CITA_ID,
+                inicio_at: '2026-10-29T10:00:00Z',
+                fin_at: '2026-10-29T10:30:00Z',
+              }),
+            ],
+          },
+          propuesta_reprogramacion: { data: [propuestaDelBarbero] },
+        });
+
+        const [cita] = await service.listCitas(user, {});
+
+        expect(cita.propuesta).toBeNull();
+      });
+
+      it('aceptar mueve la cita con el token del cliente y la deja confirmada', async () => {
+        const adminCalls = fakeDatabase({
+          ...{
+            barbero: { data: barbero },
+            disponibilidad_barbero: { data: lunes },
+          },
+          cita: [
+            { data: rawCita() }, // la cita del cliente
+            { data: [] }, // ocupadas del barbero
+            { data: [] }, // ocupadas del cliente
+            {
+              data: viewRow({
+                inicio_at: '2026-11-02T14:00:00Z',
+                fin_at: '2026-11-02T14:30:00Z',
+              }),
+            },
+          ],
+          propuesta_reprogramacion: [
+            { data: [propuestaDelBarbero] }, // pendiente
+            claimed, // reclamada como aceptada
+            { data: [] }, // ya no hay pendiente al releer
+          ],
+        });
+        const { calls, spy } = fakeUserClient({
+          cita: { data: { id_cita: CITA_ID } },
+        });
+
+        const result = await service.aceptarPropuesta(user, CITA_ID);
+
+        expect(spy).toHaveBeenCalledWith('token-del-cliente');
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'update',
+          args: [
+            {
+              inicio_at: '2026-11-02T14:00:00Z',
+              fin_at: '2026-11-02T14:30:00Z',
+            },
+          ],
+        });
+        expect(adminCalls).toContainEqual({
+          table: 'propuesta_reprogramacion',
+          method: 'update',
+          args: [expect.objectContaining({ estado: 'aceptada' })],
+        });
+        expect(result.message).toContain('Aceptaste');
+        expect(result.cita.horaInicio).toBe('09:00');
+        expect(result.cita.estado).toBe('confirmada');
+        expect(result.cita.propuesta).toBeNull();
+      });
+
+      it('rechazar deja la cita como estaba', async () => {
+        const adminCalls = fakeDatabase({
+          cita: [{ data: rawCita() }, { data: viewRow() }],
+          propuesta_reprogramacion: [
+            { data: [propuestaDelBarbero] },
+            claimed,
+            { data: [] },
+          ],
+        });
+        const { spy } = fakeUserClient({});
+
+        const result = await service.rechazarPropuesta(user, CITA_ID);
+
+        expect(adminCalls).toContainEqual({
+          table: 'propuesta_reprogramacion',
+          method: 'update',
+          args: [expect.objectContaining({ estado: 'rechazada' })],
+        });
+        expect(spy).not.toHaveBeenCalled();
+        expect(result.message).toContain('Rechazaste');
+        expect(result.cita.horaInicio).toBe('08:00');
+      });
+
+      it('no se puede responder una propuesta ajena de otro cliente (404) ni retirar la del barbero (403)', async () => {
+        fakeDatabase({ cita: { data: null } });
+        await expect(
+          service.aceptarPropuesta(user, CITA_ID),
+        ).rejects.toBeInstanceOf(NotFoundException);
+
+        fakeDatabase({
+          cita: { data: rawCita() },
+          propuesta_reprogramacion: { data: [propuestaDelBarbero] },
+        });
+        await expect(service.retirarPropuesta(user, CITA_ID)).rejects.toThrow(
+          'Solo quien hizo la propuesta puede retirarla',
+        );
+      });
+
+      it('el cliente retira su propia propuesta', async () => {
+        const mine = { ...propuestaDelBarbero, propuesta_por: 'cliente' };
+        const adminCalls = fakeDatabase({
+          cita: [{ data: rawCita() }, { data: viewRow() }],
+          propuesta_reprogramacion: [{ data: [mine] }, claimed, { data: [] }],
+        });
+
+        const result = await service.retirarPropuesta(user, CITA_ID);
+
+        expect(adminCalls).toContainEqual({
+          table: 'propuesta_reprogramacion',
+          method: 'update',
+          args: [expect.objectContaining({ estado: 'retirada' })],
+        });
+        expect(result.message).toBe('Propuesta retirada.');
+        expect(result.cita.propuesta).toBeNull();
+      });
+    });
+  });
 });

@@ -12,6 +12,16 @@ import { AccountsService } from '../common/accounts.service';
 import type { AuthUser } from '../common/auth/auth-user';
 import { mapCitaError } from '../common/cita-errors';
 import { EXPIRED_REASON, markPastCitas } from '../common/maintenance';
+import {
+  aceptar,
+  loadPendientes,
+  propuestaVigente,
+  proponer,
+  rechazar,
+  retirar,
+  toPropuestaView,
+  type PropuestaRow,
+} from '../common/reprogramacion';
 import { first, type One } from '../common/postgrest';
 import {
   createSupabaseUserClient,
@@ -25,7 +35,6 @@ import {
   fitsInBlocks,
   formatMinutes,
   normalizeBlocks,
-  toInstant,
   type Block,
 } from './barbero.utils';
 import type {
@@ -310,8 +319,12 @@ export class BarberoService {
     const rows = (data ?? []) as unknown as CitaRow[];
     const page = grupo === 'historial' ? rows.slice(0, limit) : rows;
 
+    const propuestas = await loadPendientes(page.map((row) => row.id_cita));
+
     return {
-      items: await Promise.all(page.map((row) => this.toView(row))),
+      items: await Promise.all(
+        page.map((row) => this.toView(row, propuestas.get(row.id_cita))),
+      ),
       hayMas: grupo === 'historial' && rows.length > limit,
     };
   }
@@ -382,38 +395,94 @@ export class BarberoService {
     return { message: 'Cita cancelada', cita: await this.getCita(user, id) };
   }
 
-  /** La duración no cambia: sale de los procedimientos con los que se agendó. */
+  /**
+   * Propone otro horario para una cita confirmada. La cita NO se mueve: sigue en
+   * su horario hasta que el cliente acepte. La duración no cambia (sale de los
+   * procedimientos con los que se agendó). Una solicitud pendiente no se
+   * reprograma: se acepta o se rechaza.
+   */
   async reprogramar(user: AuthUser, id: string, dto: ReprogramarDto) {
     const cita = await this.loadOwnedCita(user, id);
 
-    if (cita.estado !== 'pendiente' && cita.estado !== 'confirmada') {
+    if (cita.estado === 'pendiente') {
+      throw new ConflictException(
+        'Las solicitudes pendientes se aceptan o se rechazan; no se reprograman',
+      );
+    }
+    if (cita.estado !== 'confirmada') {
       throw new ConflictException('Esta cita ya no se puede reprogramar');
     }
 
-    const inicio = toInstant(dto?.fecha, dto?.horaInicio);
-    if (inicio <= new Date()) {
-      throw new BadRequestException(
-        'No se puede programar en una fecha u hora pasada',
-      );
-    }
-
-    const minutes = await this.durationOf(id);
-    if (minutes <= 0) {
+    const duracionMinutos = await this.durationOf(id);
+    if (duracionMinutos <= 0) {
       throw new BadRequestException('La cita no tiene procedimientos válidos');
     }
 
-    const fin = new Date(inicio.getTime() + minutes * 60000);
-
-    await this.updateAsBarbero(user, id, {
-      inicio_at: inicio.toISOString(),
-      fin_at: fin.toISOString(),
+    await proponer({
+      actor: 'barbero',
+      cita,
+      duracionMinutos,
+      fecha: dto?.fecha,
+      horaInicio: dto?.horaInicio,
+      now: this.now(),
     });
-    await this.auditCita(user, id, 'reprogramar_cita', {
+    await this.auditCita(user, id, 'proponer_reprogramacion', {
       desde: cita.inicio_at,
-      hasta: inicio.toISOString(),
+      fecha: dto.fecha,
+      horaInicio: dto.horaInicio,
     });
 
-    return { message: 'Cita reprogramada', cita: await this.getCita(user, id) };
+    return {
+      message:
+        'Propuesta enviada. La cita sigue en su horario actual hasta que el cliente acepte el cambio.',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** El cliente propuso otro horario y el barbero lo acepta: la cita se mueve. */
+  async aceptarPropuesta(user: AuthUser, id: string) {
+    const cita = await this.loadOwnedCita(user, id);
+    const duracionMinutos = await this.durationOf(id);
+
+    await aceptar({
+      user,
+      actor: 'barbero',
+      cita,
+      duracionMinutos,
+      now: this.now(),
+    });
+    await this.auditCita(user, id, 'aceptar_reprogramacion', {});
+
+    return {
+      message: 'Aceptaste el nuevo horario. La cita fue reprogramada.',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** El barbero rechaza la propuesta del cliente: la cita sigue como estaba. */
+  async rechazarPropuesta(user: AuthUser, id: string) {
+    const cita = await this.loadOwnedCita(user, id);
+
+    await rechazar('barbero', cita);
+    await this.auditCita(user, id, 'rechazar_reprogramacion', {});
+
+    return {
+      message: 'Rechazaste el cambio. La cita sigue en su horario original.',
+      cita: await this.getCita(user, id),
+    };
+  }
+
+  /** El barbero retira su propia propuesta. */
+  async retirarPropuesta(user: AuthUser, id: string) {
+    const cita = await this.loadOwnedCita(user, id);
+
+    await retirar('barbero', cita);
+    await this.auditCita(user, id, 'retirar_reprogramacion', {});
+
+    return {
+      message: 'Propuesta retirada.',
+      cita: await this.getCita(user, id),
+    };
   }
 
   // ---------------------------------------------------------------------
@@ -455,6 +524,11 @@ export class BarberoService {
     });
   }
 
+  /** Reloj aparte para poder fijar la hora en las pruebas. */
+  protected now() {
+    return new Date();
+  }
+
   private markPast() {
     return markPastCitas(this.logger);
   }
@@ -467,7 +541,7 @@ export class BarberoService {
 
     const { data, error } = await supabaseAdmin
       .from('cita')
-      .select('id_cita, estado, inicio_at, fin_at')
+      .select('id_cita, id_barbero, id_cliente, estado, inicio_at, fin_at')
       .eq('id_cita', id)
       .eq('id_barbero', user.profileId)
       .maybeSingle();
@@ -483,6 +557,8 @@ export class BarberoService {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     return data as unknown as {
       id_cita: string;
+      id_barbero: string;
+      id_cliente: string;
       estado: string;
       inicio_at: string;
       fin_at: string;
@@ -545,11 +621,13 @@ export class BarberoService {
       );
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-    return this.toView(data as unknown as CitaRow);
+    return this.toView(data, (await loadPendientes([id])).get(id));
   }
 
-  private async toView(row: CitaRow): Promise<CitaBarberoView> {
+  private async toView(
+    row: CitaRow,
+    propuesta?: PropuestaRow,
+  ): Promise<CitaBarberoView> {
     const items = row.cita_procedimiento ?? [];
     const procedimientos = items.map((item) => ({
       nombre: first(item.procedimiento)?.nombre ?? 'Procedimiento',
@@ -590,6 +668,10 @@ export class BarberoService {
       puedeModificar:
         (row.estado === 'pendiente' || row.estado === 'confirmada') &&
         new Date(row.inicio_at).getTime() - now >= DAY_MS,
+      propuesta: toPropuestaView(
+        propuestaVigente(row, propuesta, this.now()),
+        'barbero',
+      ),
       calificacion: calificacion
         ? {
             puntuacion: Number(calificacion.puntuacion_numerica),
