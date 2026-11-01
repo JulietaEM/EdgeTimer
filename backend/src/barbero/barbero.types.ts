@@ -1,3 +1,4 @@
+import type { PropuestaView } from '../common/reprogramacion';
 export type GrupoCitas = 'solicitudes' | 'proximas' | 'historial';
 
 export interface DisponibilidadDto {
@@ -41,5 +42,7 @@ export interface CitaBarberoView {
   motivo: string;
   /** Se puede cancelar o reprogramar: falta al menos 1 día. */
   puedeModificar: boolean;
+  /** Cambio de horario pendiente de respuesta (propio o de la otra parte). */
+  propuesta: PropuestaView | null;
   calificacion: { puntuacion: number; resena: string } | null;
 }

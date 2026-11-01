@@ -21,13 +21,13 @@ import api, {
   setSessionExpiredHandler,
 } from './src/api';
 import { AdminHomeScreen } from './src/screens/AdminHome';
-import { AgendaScreen } from './src/screens/Agenda';
 import { BarberoAgendaScreen } from './src/screens/barbero/BarberoAgenda';
 import { BarberoDisponibilidadScreen } from './src/screens/barbero/BarberoDisponibilidad';
 import { BarberoHomeScreen } from './src/screens/barbero/BarberoHome';
 import { ChangePasswordScreen } from './src/screens/ChangePassword';
 import { ForgotPasswordScreen } from './src/screens/ForgotPassword';
 import { AgendarCitaScreen } from './src/screens/cliente/AgendarCita';
+import { ClienteAgendaScreen } from './src/screens/cliente/ClienteAgenda';
 import { ClienteInicioScreen } from './src/screens/cliente/ClienteInicio';
 import { LoginScreen } from './src/screens/Login';
 import { PerfilScreen } from './src/screens/Perfil';
@@ -207,7 +207,7 @@ function AppContent() {
           activeRole === 'barbero' ? (
             <BarberoAgendaScreen />
           ) : (
-            <AgendaScreen profile={profile} role={activeRole} />
+            <ClienteAgendaScreen />
           )
         ) : appScreen === 'disponibilidad' ? (
           <BarberoDisponibilidadScreen />

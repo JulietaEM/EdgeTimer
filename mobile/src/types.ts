@@ -151,6 +151,19 @@ export interface ResumenBarbero {
   tieneDisponibilidad: boolean;
 }
 
+/** Cambio de horario propuesto por una de las partes y pendiente de respuesta. */
+export interface PropuestaCita {
+  id: string;
+  propuestaPor: 'cliente' | 'barbero';
+  /** La hizo quien mira: puede retirarla. */
+  esPropia: boolean;
+  /** La hizo la otra parte: quien mira puede aceptarla o rechazarla. */
+  puedeResponder: boolean;
+  fecha: string;
+  horaInicio: string;
+  horaFin: string;
+}
+
 export interface CitaBarbero {
   id: string;
   cliente: { id: string; nombre: string; telefono: string | null; foto: string | null };
@@ -167,6 +180,7 @@ export interface CitaBarbero {
   notas: string;
   motivo: string;
   puedeModificar: boolean;
+  propuesta: PropuestaCita | null;
   calificacion: { puntuacion: number; resena: string } | null;
 }
 
@@ -268,6 +282,9 @@ export interface CitaCliente {
   costoTotal: number;
   notas: string;
   motivo: string | null;
+  /** Abierta y con al menos 1 día de antelación: se puede cancelar o reprogramar. */
+  puedeModificar: boolean;
+  propuesta: PropuestaCita | null;
   barbero: { id: string; nombre: string; foto: string | null };
   barberia: { id: string; nombre: string; direccion: string };
   procedimientos: { id: string; nombre: string; precio: number; duracionMinutos: number }[];

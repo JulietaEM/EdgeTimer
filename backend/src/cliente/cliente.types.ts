@@ -1,3 +1,5 @@
+import type { PropuestaView } from '../common/reprogramacion';
+
 /** Barbería que el cliente puede elegir (paso 1 del asistente). */
 export interface BarberiaView {
   id: string;
@@ -124,6 +126,10 @@ export interface CitaClienteView {
   notas: string;
   /** Motivo de una cancelación o rechazo, si lo hay. */
   motivo: string | null;
+  /** Abierta y con al menos 1 día de antelación: se puede cancelar o reprogramar. */
+  puedeModificar: boolean;
+  /** Cambio de horario pendiente de respuesta (propio o de la otra parte). */
+  propuesta: PropuestaView | null;
   barbero: { id: string; nombre: string; foto: string | null };
   barberia: { id: string; nombre: string; direccion: string };
   procedimientos: {
@@ -132,4 +138,20 @@ export interface CitaClienteView {
     precio: number;
     duracionMinutos: number;
   }[];
+}
+
+/** `GET /cliente/citas?grupo=proximas` (el historial llega con HU-24). */
+export interface CitasClienteQuery {
+  grupo?: string;
+}
+
+export interface MotivoCitaDto {
+  motivo?: string;
+}
+
+export interface ReprogramarCitaDto {
+  /** AAAA-MM-DD */
+  fecha: string;
+  /** HH:MM, una de las horas que devolvió la disponibilidad de esa cita. */
+  horaInicio: string;
 }

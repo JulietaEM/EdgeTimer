@@ -1,8 +1,22 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import type { AuthUser } from '../common/auth/auth-user';
 import { CurrentUser, Roles } from '../common/auth/decorators';
 import { ClienteService } from './cliente.service';
-import type { CrearCitaDto, DisponibilidadQuery } from './cliente.types';
+import type {
+  CitasClienteQuery,
+  CrearCitaDto,
+  DisponibilidadQuery,
+  MotivoCitaDto,
+  ReprogramarCitaDto,
+} from './cliente.types';
 
 /** Todo lo de este controlador es solo para clientes. */
 @Controller('cliente')
@@ -42,5 +56,43 @@ export class ClienteController {
   @Post('citas')
   crearCita(@CurrentUser() user: AuthUser, @Body() dto: CrearCitaDto) {
     return this.clienteService.crearCita(user, dto);
+  }
+
+  @Get('citas')
+  citas(@CurrentUser() user: AuthUser, @Query() query: CitasClienteQuery) {
+    return this.clienteService.listCitas(user, query);
+  }
+
+  @Patch('citas/:id/cancelar')
+  cancelar(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: MotivoCitaDto,
+  ) {
+    return this.clienteService.cancelarCita(user, id, dto);
+  }
+
+  @Patch('citas/:id/reprogramar')
+  reprogramar(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: ReprogramarCitaDto,
+  ) {
+    return this.clienteService.reprogramarCita(user, id, dto);
+  }
+
+  @Patch('citas/:id/propuesta/aceptar')
+  aceptarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.clienteService.aceptarPropuesta(user, id);
+  }
+
+  @Patch('citas/:id/propuesta/rechazar')
+  rechazarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.clienteService.rechazarPropuesta(user, id);
+  }
+
+  @Patch('citas/:id/propuesta/retirar')
+  retirarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.clienteService.retirarPropuesta(user, id);
   }
 }

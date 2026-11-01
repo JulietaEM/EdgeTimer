@@ -1,4 +1,5 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { PropuestaBanner } from '../../components/PropuestaBanner';
 import { colors, fonts } from '../../theme';
 import type { CitaBarbero } from '../../types';
 import { formatMoney, formatShortDate } from '../../utils/format';
@@ -9,20 +10,30 @@ const avatar = require('../../../assets/user.png');
 export function CitaBarberoCard({
   cita,
   compact,
+  busy,
   onAccept,
+  onAcceptProposal,
   onCancel,
   onReject,
+  onRejectProposal,
   onReprogram,
+  onWithdrawProposal,
 }: {
   cita: CitaBarbero;
   compact?: boolean;
+  busy?: boolean;
   onAccept?: () => void;
+  onAcceptProposal?: () => void;
   onCancel?: () => void;
   onReject?: () => void;
+  onRejectProposal?: () => void;
+  /** Solo para citas confirmadas: las solicitudes pendientes se aceptan o se rechazan. */
   onReprogram?: () => void;
+  onWithdrawProposal?: () => void;
 }) {
   const isOpen = cita.estado === 'pendiente' || cita.estado === 'confirmada';
-  const showChange = (onCancel || onReprogram) && isOpen;
+  const canReprogram = !!onReprogram && cita.estado === 'confirmada';
+  const showChange = (onCancel || canReprogram) && isOpen;
 
   return (
     <View style={[styles.card, compact && styles.fullWidth]}>
@@ -49,6 +60,17 @@ export function CitaBarberoCard({
       </Text>
       <Text style={[styles.status, statusStyle(cita)]}>{cita.estadoLabel}</Text>
 
+      {cita.propuesta ? (
+        <PropuestaBanner
+          busy={busy}
+          otraParte={cita.cliente.nombre}
+          propuesta={cita.propuesta}
+          onAccept={onAcceptProposal}
+          onReject={onRejectProposal}
+          onWithdraw={onWithdrawProposal}
+        />
+      ) : null}
+
       {cita.notas ? <Text style={styles.note}>“{cita.notas}”</Text> : null}
       {cita.motivo ? <Text style={styles.note}>Motivo: {cita.motivo}</Text> : null}
       {cita.calificacion ? (
@@ -74,7 +96,7 @@ export function CitaBarberoCard({
 
       {showChange ? (
         <View style={styles.actions}>
-          {onReprogram ? (
+          {canReprogram ? (
             <Pressable
               style={[styles.primary, !cita.puedeModificar && styles.disabled]}
               disabled={!cita.puedeModificar}

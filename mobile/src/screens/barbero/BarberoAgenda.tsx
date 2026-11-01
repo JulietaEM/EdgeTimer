@@ -31,6 +31,7 @@ export function BarberoAgendaScreen() {
   const [rejecting, setRejecting] = useState<CitaBarbero | null>(null);
   const [cancelling, setCancelling] = useState<CitaBarbero | null>(null);
   const [reprogramming, setReprogramming] = useState<CitaBarbero | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -75,6 +76,19 @@ export function BarberoAgendaScreen() {
     load(tab);
   };
 
+  const respondProposal = async (cita: CitaBarbero, action: 'aceptar' | 'rechazar' | 'retirar') => {
+    setBusyId(cita.id);
+    try {
+      const response = await api.patch(`/barbero/citas/${cita.id}/propuesta/${action}`);
+      showToast(response.data.message);
+    } catch (error) {
+      showToast(readError(error, 'No fue posible responder a la propuesta.'));
+    } finally {
+      setBusyId(null);
+      load(tab);
+    }
+  };
+
   const done = (message: string) => {
     setRejecting(null);
     setCancelling(null);
@@ -115,10 +129,14 @@ export function BarberoAgendaScreen() {
               key={cita.id}
               cita={cita}
               compact={isCompact}
+              busy={busyId === cita.id}
               onAccept={tab === 'solicitudes' ? () => accept(cita) : undefined}
               onReject={tab === 'solicitudes' ? () => setRejecting(cita) : undefined}
               onReprogram={tab !== 'historial' ? () => setReprogramming(cita) : undefined}
               onCancel={tab !== 'historial' ? () => setCancelling(cita) : undefined}
+              onAcceptProposal={() => respondProposal(cita, 'aceptar')}
+              onRejectProposal={() => respondProposal(cita, 'rechazar')}
+              onWithdrawProposal={() => respondProposal(cita, 'retirar')}
             />
           ))}
         </View>

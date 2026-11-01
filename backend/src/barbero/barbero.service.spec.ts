@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 
@@ -12,6 +13,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 import { AccountsService } from '../common/accounts.service';
 import type { AuthUser } from '../common/auth/auth-user';
 import * as supabase from '../supabase';
+import { fakeAdmin, fakeUser } from '../test-utils/fake-supabase';
 import { BarberoService } from './barbero.service';
 import { bogotaDate } from './barbero.utils';
 
@@ -35,7 +37,7 @@ type Call = { table: string; method: string; args: unknown[] };
 function fakeFrom(results: Record<string, Result>, calls: Call[]) {
   return (table: string) => {
     const result = { data: null, error: null, ...results[table] };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const proxy: any = new Proxy(function () {}, {
       get: (_target, prop: string) => {
         if (prop === 'then') {
@@ -44,7 +46,7 @@ function fakeFrom(results: Record<string, Result>, calls: Call[]) {
             reject: (reason: unknown) => unknown,
           ) => Promise.resolve(result).then(resolve, reject);
         }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+
         return (...args: unknown[]) => {
           calls.push({ table, method: prop, args });
           // eslint-disable-next-line @typescript-eslint/no-unsafe-return
@@ -416,58 +418,6 @@ describe('BarberoService', () => {
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('reprograma conservando la duración de los procedimientos', async () => {
-      const { fecha } = inDays(8);
-      const { userCalls } = fakeDatabase(owned(), {
-        cita: { data: { id_cita: CITA_ID } },
-      });
-
-      const result = await service.reprogramar(barbero, CITA_ID, {
-        fecha,
-        horaInicio: '15:00',
-      });
-
-      expect(result.message).toBe('Cita reprogramada');
-      const update = userCalls.find((c) => c.method === 'update');
-      const changes = update?.args[0] as { inicio_at: string; fin_at: string };
-      expect(
-        new Date(changes.fin_at).getTime() -
-          new Date(changes.inicio_at).getTime(),
-      ).toBe(30 * 60000);
-    });
-
-    it('traduce un solape con otra cita a 409', async () => {
-      const { fecha } = inDays(8);
-      fakeDatabase(owned(), {
-        cita: {
-          error: {
-            message:
-              'conflicting key value violates no_citas_solapadas_barbero',
-          },
-        },
-      });
-
-      await expect(
-        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '15:00' }),
-      ).rejects.toThrow('Ya tienes otra cita en ese horario');
-    });
-
-    it('traduce un horario fuera de disponibilidad a 400', async () => {
-      const { fecha } = inDays(8);
-      fakeDatabase(owned(), {
-        cita: {
-          error: {
-            message:
-              'La cita debe estar dentro de la disponibilidad configurada del barbero',
-          },
-        },
-      });
-
-      await expect(
-        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '15:00' }),
-      ).rejects.toThrow('fuera de tu disponibilidad');
-    });
-
     it('no reprograma a una fecha pasada (400)', async () => {
       fakeDatabase(owned());
 
@@ -477,6 +427,332 @@ describe('BarberoService', () => {
           horaInicio: '10:00',
         }),
       ).rejects.toThrow('pasada');
+    });
+  });
+
+  describe('propuestas de cambio de horario', () => {
+    const CLIENTE = 'c1';
+    const PROPUESTA_ID = '77777777-7777-4777-8777-777777777777';
+    const isoDow = (fecha: string) =>
+      new Date(`${fecha}T12:00:00-05:00`).getUTCDay() || 7;
+
+    /** Horario de 8 a 18 el día de la semana de `fecha`. */
+    const schedule = (fecha: string) => ({
+      disponibilidad_barbero: {
+        data: [
+          {
+            id_barbero: 'b1',
+            dia_semana: isoDow(fecha),
+            hora_inicio: '08:00:00',
+            hora_fin: '18:00:00',
+          },
+        ],
+      },
+    });
+    const ownedRow = (overrides: Record<string, unknown> = {}) => {
+      const { inicio } = inDays(5);
+      return {
+        id_cita: CITA_ID,
+        id_barbero: 'b1',
+        id_cliente: CLIENTE,
+        estado: 'confirmada',
+        inicio_at: inicio.toISOString(),
+        fin_at: new Date(inicio.getTime() + 1800000).toISOString(),
+        ...overrides,
+      };
+    };
+    const viewRow = () => ({
+      ...ownedRow(),
+      notas_cliente: null,
+      motivo_estado: null,
+      cliente: {
+        id_cliente: CLIENTE,
+        nombre_cliente: 'Ana',
+        telefono: '300',
+        foto_perfil: null,
+      },
+      cita_procedimiento: [
+        {
+          precio_aplicado: '27000',
+          duracion_minutos_aplicada: 30,
+          procedimiento: { nombre: 'Corte clásico' },
+        },
+      ],
+      calificacion: null,
+    });
+    const propuestaRow = (fecha: string, por: 'cliente' | 'barbero') => {
+      const inicio = new Date(`${fecha}T15:00:00-05:00`);
+      return {
+        id_propuesta: PROPUESTA_ID,
+        id_cita: CITA_ID,
+        propuesta_por: por,
+        inicio_at: inicio.toISOString(),
+        fin_at: new Date(inicio.getTime() + 1800000).toISOString(),
+        estado: 'pendiente',
+      };
+    };
+    const claimed = { data: { id_propuesta: PROPUESTA_ID } };
+    const duration = {
+      cita_procedimiento: { data: [{ duracion_minutos_aplicada: 30 }] },
+    };
+
+    it('reprogramar una cita confirmada crea una propuesta y NO mueve la cita', async () => {
+      const { fecha } = inDays(8);
+      const calls = fakeAdmin({
+        ...schedule(fecha),
+        ...duration,
+        cita: [
+          { data: ownedRow() },
+          { data: [] },
+          { data: [] },
+          { data: viewRow() },
+        ],
+        propuesta_reprogramacion: [
+          { data: [] },
+          { error: null },
+          { data: [propuestaRow(fecha, 'barbero')] },
+        ],
+      });
+      const { spy } = fakeUser({});
+
+      const result = await service.reprogramar(barbero, CITA_ID, {
+        fecha,
+        horaInicio: '15:00',
+      });
+
+      const insert = calls.find(
+        (c) => c.table === 'propuesta_reprogramacion' && c.method === 'insert',
+      );
+      const row = insert?.args[0] as {
+        propuesta_por: string;
+        inicio_at: string;
+        fin_at: string;
+      };
+      expect(row.propuesta_por).toBe('barbero');
+      // Conserva la duración de los procedimientos (30 min).
+      expect(
+        new Date(row.fin_at).getTime() - new Date(row.inicio_at).getTime(),
+      ).toBe(30 * 60000);
+      // La cita no se toca: ni escritura con el token ni update de la service role.
+      expect(spy).not.toHaveBeenCalled();
+      expect(
+        calls.some((c) => c.table === 'cita' && c.method === 'update'),
+      ).toBe(false);
+      expect(result.message).toContain('Propuesta enviada');
+      expect(result.cita.propuesta).toMatchObject({
+        propuestaPor: 'barbero',
+        esPropia: true,
+        puedeResponder: false,
+        horaInicio: '15:00',
+      });
+      expect(
+        JSON.stringify((accounts.audit as jest.Mock).mock.calls),
+      ).toContain('proponer_reprogramacion');
+    });
+
+    it('una solicitud pendiente no se reprograma: se acepta o se rechaza', async () => {
+      const { fecha } = inDays(8);
+      fakeAdmin({ cita: { data: ownedRow({ estado: 'pendiente' }) } });
+
+      await expect(
+        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '15:00' }),
+      ).rejects.toThrow('se aceptan o se rechazan');
+    });
+
+    it('una cita cancelada o realizada ya no se reprograma (409)', async () => {
+      const { fecha } = inDays(8);
+      fakeAdmin({ cita: { data: ownedRow({ estado: 'cancelada' }) } });
+
+      await expect(
+        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '15:00' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('valida la hora nueva contra su horario y las citas de ambos (409)', async () => {
+      const { fecha } = inDays(8);
+      const busy = new Date(`${fecha}T15:00:00-05:00`);
+
+      // Otra cita del barbero ocupa esa hora.
+      fakeAdmin({
+        ...schedule(fecha),
+        ...duration,
+        cita: [
+          { data: ownedRow() },
+          {
+            data: [
+              {
+                inicio_at: busy.toISOString(),
+                fin_at: new Date(busy.getTime() + 1800000).toISOString(),
+              },
+            ],
+          },
+          { data: [] },
+        ],
+      });
+      await expect(
+        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '15:00' }),
+      ).rejects.toThrow('ya no está disponible');
+
+      // Fuera de su horario laboral (8 a 18).
+      fakeAdmin({
+        ...schedule(fecha),
+        ...duration,
+        cita: [{ data: ownedRow() }, { data: [] }, { data: [] }],
+      });
+      await expect(
+        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '19:00' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('con menos de 1 día de antelación responde 400 y no crea nada', async () => {
+      const { fecha } = inDays(8);
+      const soon = new Date(Date.now() + 3 * 3600000);
+      const calls = fakeAdmin({
+        ...duration,
+        cita: {
+          data: ownedRow({
+            inicio_at: soon.toISOString(),
+            fin_at: new Date(soon.getTime() + 1800000).toISOString(),
+          }),
+        },
+      });
+
+      await expect(
+        service.reprogramar(barbero, CITA_ID, { fecha, horaInicio: '15:00' }),
+      ).rejects.toThrow('al menos 1 día de antelación');
+      expect(calls.some((c) => c.method === 'insert')).toBe(false);
+    });
+
+    it('aceptar la propuesta del cliente mueve la cita con el token del barbero', async () => {
+      const { fecha } = inDays(8);
+      const calls = fakeAdmin({
+        ...schedule(fecha),
+        ...duration,
+        cita: [
+          { data: ownedRow() },
+          { data: [] },
+          { data: [] },
+          { data: viewRow() },
+        ],
+        propuesta_reprogramacion: [
+          { data: [propuestaRow(fecha, 'cliente')] },
+          claimed,
+          { data: [] },
+        ],
+      });
+      const { calls: userCalls, spy } = fakeUser({
+        cita: { data: { id_cita: CITA_ID } },
+      });
+
+      const result = await service.aceptarPropuesta(barbero, CITA_ID);
+
+      expect(spy).toHaveBeenCalledWith('token-barbero');
+      expect(userCalls).toContainEqual({
+        table: 'cita',
+        method: 'eq',
+        args: ['id_barbero', 'b1'],
+      });
+      expect(userCalls.find((c) => c.method === 'update')?.args[0]).toEqual({
+        inicio_at: new Date(`${fecha}T15:00:00-05:00`).toISOString(),
+        fin_at: new Date(`${fecha}T15:30:00-05:00`).toISOString(),
+      });
+      expect(calls).toContainEqual({
+        table: 'propuesta_reprogramacion',
+        method: 'update',
+        args: [expect.objectContaining({ estado: 'aceptada' })],
+      });
+      expect(result.message).toContain('Aceptaste');
+    });
+
+    it('no puede aceptar ni rechazar su propia propuesta (403)', async () => {
+      const { fecha } = inDays(8);
+      const db = {
+        ...schedule(fecha),
+        ...duration,
+        cita: { data: ownedRow() },
+        propuesta_reprogramacion: { data: [propuestaRow(fecha, 'barbero')] },
+      };
+
+      fakeAdmin(db);
+      await expect(
+        service.aceptarPropuesta(barbero, CITA_ID),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      fakeAdmin(db);
+      await expect(
+        service.rechazarPropuesta(barbero, CITA_ID),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('rechazar la propuesta del cliente deja la cita como estaba', async () => {
+      const { fecha } = inDays(8);
+      const calls = fakeAdmin({
+        cita: [{ data: ownedRow() }, { data: viewRow() }],
+        propuesta_reprogramacion: [
+          { data: [propuestaRow(fecha, 'cliente')] },
+          claimed,
+          { data: [] },
+        ],
+      });
+      const { spy } = fakeUser({});
+
+      const result = await service.rechazarPropuesta(barbero, CITA_ID);
+
+      expect(calls).toContainEqual({
+        table: 'propuesta_reprogramacion',
+        method: 'update',
+        args: [expect.objectContaining({ estado: 'rechazada' })],
+      });
+      expect(spy).not.toHaveBeenCalled();
+      expect(result.message).toContain('Rechazaste');
+    });
+
+    it('retira su propia propuesta, pero no la del cliente', async () => {
+      const { fecha } = inDays(8);
+      const calls = fakeAdmin({
+        cita: [{ data: ownedRow() }, { data: viewRow() }],
+        propuesta_reprogramacion: [
+          { data: [propuestaRow(fecha, 'barbero')] },
+          claimed,
+          { data: [] },
+        ],
+      });
+
+      const result = await service.retirarPropuesta(barbero, CITA_ID);
+      expect(calls).toContainEqual({
+        table: 'propuesta_reprogramacion',
+        method: 'update',
+        args: [expect.objectContaining({ estado: 'retirada' })],
+      });
+      expect(result.message).toBe('Propuesta retirada.');
+
+      fakeAdmin({
+        cita: { data: ownedRow() },
+        propuesta_reprogramacion: { data: [propuestaRow(fecha, 'cliente')] },
+      });
+      await expect(
+        service.retirarPropuesta(barbero, CITA_ID),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('la agenda del barbero muestra la propuesta del cliente para que responda', async () => {
+      const { fecha } = inDays(8);
+      jest
+        .spyOn(supabase.supabaseAdmin, 'rpc')
+        .mockResolvedValue({ error: null } as never);
+      fakeAdmin({
+        cita: { data: [viewRow()] },
+        propuesta_reprogramacion: { data: [propuestaRow(fecha, 'cliente')] },
+      });
+
+      const result = await service.listCitas(barbero, { grupo: 'proximas' });
+
+      expect(result.items[0].propuesta).toMatchObject({
+        propuestaPor: 'cliente',
+        esPropia: false,
+        puedeResponder: true,
+        horaInicio: '15:00',
+      });
     });
   });
 });

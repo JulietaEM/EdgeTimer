@@ -144,7 +144,7 @@ export function ReprogramModal({
       });
       onDone(response.data.message);
     } catch (err) {
-      setError(readError(err, 'No fue posible reprogramar la cita.'));
+      setError(readError(err, 'No fue posible enviar la propuesta.'));
     } finally {
       setSaving(false);
     }
@@ -156,8 +156,8 @@ export function ReprogramModal({
     <FormModal
       loading={saving}
       open={cita !== null}
-      submitLabel="Reprogramar"
-      title="Reprogramar cita"
+      submitLabel="Enviar propuesta"
+      title="Proponer otro horario"
       onClose={onClose}
       onSubmit={submit}
     >
@@ -167,6 +167,10 @@ export function ReprogramModal({
           {cita.horaInicio}
         </Text>
       ) : null}
+      <Text style={styles.notice}>
+        La cita no cambia hasta que el cliente acepte el nuevo horario. Mientras tanto sigue en su
+        horario actual.
+      </Text>
       {tooSoon ? (
         <Text style={styles.error}>
           Solo puedes reprogramar citas con al menos 1 día de antelación.
@@ -214,6 +218,15 @@ const styles = StyleSheet.create({
   text: { color: colors.gray, fontFamily: fonts.medium, fontSize: 18 },
   label: { color: colors.black, fontFamily: fonts.medium, fontSize: 19, marginBottom: 7 },
   error: { color: colors.danger, fontFamily: fonts.medium, fontSize: 18 },
+  notice: {
+    backgroundColor: colors.softGold,
+    borderRadius: 8,
+    color: colors.darkGold,
+    fontFamily: fonts.medium,
+    fontSize: 17,
+    overflow: 'hidden',
+    padding: 10,
+  },
   pillWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pill: {
     borderColor: colors.border,
