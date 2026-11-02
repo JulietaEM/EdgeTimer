@@ -1045,11 +1045,14 @@ describe('ClienteService (HU-17)', () => {
     });
 
     describe('listCitas', () => {
-      it('solo acepta el grupo "proximas" por ahora', async () => {
+      it('rechaza un grupo que no existe y una paginación inválida', async () => {
         const calls = fakeDatabase({});
 
         await expect(
-          service.listCitas(user, { grupo: 'historial' }),
+          service.listCitas(user, { grupo: 'otro' }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        await expect(
+          service.listCitas(user, { grupo: 'historial', offset: 'x' }),
         ).rejects.toBeInstanceOf(BadRequestException);
         expect(calls).toHaveLength(0);
       });
@@ -1086,7 +1089,8 @@ describe('ClienteService (HU-17)', () => {
           method: 'in',
           args: ['estado', ['pendiente', 'confirmada']],
         });
-        expect(result.map((cita) => cita.puedeModificar)).toEqual([
+        expect(result.hayMas).toBe(false);
+        expect(result.items.map((cita) => cita.puedeModificar)).toEqual([
           true,
           false,
         ]);
@@ -1368,7 +1372,9 @@ describe('ClienteService (HU-17)', () => {
           propuesta_reprogramacion: { data: [propuestaDelBarbero] },
         });
 
-        const [cita] = await service.listCitas(user, {});
+        const {
+          items: [cita],
+        } = await service.listCitas(user, {});
 
         expect(cita.propuesta).toMatchObject({
           propuestaPor: 'barbero',
@@ -1397,7 +1403,9 @@ describe('ClienteService (HU-17)', () => {
           propuesta_reprogramacion: { data: [propuestaDelBarbero] },
         });
 
-        const [cita] = await service.listCitas(user, {});
+        const {
+          items: [cita],
+        } = await service.listCitas(user, {});
 
         expect(cita.propuesta).toBeNull();
       });
@@ -1507,6 +1515,292 @@ describe('ClienteService (HU-17)', () => {
         });
         expect(result.message).toBe('Propuesta retirada.');
         expect(result.cita.propuesta).toBeNull();
+      });
+    });
+  });
+
+  describe('HU-23: historial y calificación', () => {
+    const CLIENTE_ID = '55555555-5555-4555-8555-555555555555';
+    const CITA_ID = '99999999-9999-4999-8999-999999999999';
+    const user = {
+      profileId: CLIENTE_ID,
+      role: 'cliente',
+      accessToken: 'token-del-cliente',
+    } as AuthUser;
+
+    const row = (overrides: Record<string, unknown> = {}) => ({
+      id_cita: CITA_ID,
+      estado: 'realizada',
+      inicio_at: '2026-10-20T15:00:00Z',
+      fin_at: '2026-10-20T15:30:00Z',
+      notas_cliente: null,
+      motivo_estado: null,
+      barbero: {
+        id_barbero: BARBERO_ID,
+        nombre_barbero: 'Carlos',
+        foto_perfil: null,
+      },
+      barberia: {
+        id_barberia: BARBERIA_ID,
+        nombre: 'AlphaCorte',
+        direccion: null,
+      },
+      cita_procedimiento: [
+        {
+          precio_aplicado: '27000',
+          duracion_minutos_aplicada: 30,
+          procedimiento: { id_procedimiento: 'p1', nombre: 'Corte clásico' },
+        },
+      ],
+      calificacion: null,
+      ...overrides,
+    });
+    const rpcOk = () =>
+      jest
+        .spyOn(supabase.supabaseAdmin, 'rpc')
+        .mockResolvedValue({ error: null } as never);
+
+    beforeEach(() => {
+      jest
+        .spyOn(service as unknown as { now: () => Date }, 'now')
+        .mockReturnValue(new Date('2026-10-28T17:00:00Z'));
+    });
+
+    describe('historial', () => {
+      it('trae realizadas, canceladas y rechazadas, de la más reciente a la más antigua', async () => {
+        rpcOk();
+        const calls = fakeDatabase({
+          cita: {
+            data: [
+              row(),
+              row({
+                id_cita: 'c2',
+                estado: 'cancelada',
+                motivo_estado: 'Imprevisto',
+              }),
+              row({
+                id_cita: 'c3',
+                estado: 'rechazada',
+                motivo_estado: 'Solicitud vencida sin respuesta',
+              }),
+            ],
+          },
+        });
+
+        const result = await service.listCitas(user, { grupo: 'historial' });
+
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'in',
+          args: ['estado', ['realizada', 'cancelada', 'rechazada']],
+        });
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'order',
+          args: ['inicio_at', { ascending: false }],
+        });
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'range',
+          args: [0, 20],
+        });
+        expect(result.items.map((c) => c.estadoLabel)).toEqual([
+          'Realizada',
+          'Cancelada',
+          'Vencida',
+        ]);
+        expect(result.hayMas).toBe(false);
+      });
+
+      it('pagina: pide una fila de más para saber si hay otra página', async () => {
+        rpcOk();
+        const calls = fakeDatabase({
+          cita: {
+            data: [
+              row({ id_cita: 'a' }),
+              row({ id_cita: 'b' }),
+              row({ id_cita: 'c' }),
+            ],
+          },
+        });
+
+        const result = await service.listCitas(user, {
+          grupo: 'historial',
+          offset: '4',
+          limit: '2',
+        });
+
+        expect(calls).toContainEqual({
+          table: 'cita',
+          method: 'range',
+          args: [4, 6],
+        });
+        expect(result.items.map((c) => c.id)).toEqual(['a', 'b']);
+        expect(result.hayMas).toBe(true);
+      });
+
+      it('marca cuáles se pueden calificar y muestra la calificación ya dada', async () => {
+        rpcOk();
+        fakeDatabase({
+          cita: {
+            data: [
+              row({ id_cita: 'sin' }),
+              row({
+                id_cita: 'con',
+                calificacion: { puntuacion_numerica: 4, resena: null },
+              }),
+              row({ id_cita: 'cancelada', estado: 'cancelada' }),
+            ],
+          },
+        });
+
+        const { items } = await service.listCitas(user, { grupo: 'historial' });
+
+        expect(items.map((c) => c.puedeCalificar)).toEqual([
+          true,
+          false,
+          false,
+        ]);
+        expect(items[0].calificacion).toBeNull();
+        expect(items[1].calificacion).toEqual({ puntuacion: 4, resena: '' });
+      });
+    });
+
+    describe('calificarCita', () => {
+      const realizada = {
+        id_cita: CITA_ID,
+        id_barbero: BARBERO_ID,
+        id_cliente: CLIENTE_ID,
+        estado: 'realizada',
+        inicio_at: '2026-10-20T15:00:00Z',
+        fin_at: '2026-10-20T15:30:00Z',
+      };
+
+      it('guarda la calificación con el token del cliente y devuelve la cita calificada', async () => {
+        rpcOk();
+        fakeDatabase({
+          cita: [
+            { data: realizada },
+            {
+              data: row({
+                calificacion: {
+                  puntuacion_numerica: 5,
+                  resena: 'Excelente corte',
+                },
+              }),
+            },
+          ],
+        });
+        const { calls, spy } = fakeUserClient({
+          calificacion: { error: null },
+        });
+
+        const result = await service.calificarCita(user, CITA_ID, {
+          puntuacion: 5,
+          resena: '  Excelente corte  ',
+        });
+
+        expect(spy).toHaveBeenCalledWith('token-del-cliente');
+        expect(calls).toContainEqual({
+          table: 'calificacion',
+          method: 'insert',
+          args: [
+            {
+              id_cita: CITA_ID,
+              puntuacion_numerica: 5,
+              resena: 'Excelente corte',
+            },
+          ],
+        });
+        expect(result.message).toBe('¡Gracias por tu calificación!');
+        expect(result.cita.calificacion).toEqual({
+          puntuacion: 5,
+          resena: 'Excelente corte',
+        });
+        expect(result.cita.puedeCalificar).toBe(false);
+      });
+
+      it('la reseña es opcional', async () => {
+        rpcOk();
+        fakeDatabase({ cita: [{ data: realizada }, { data: row() }] });
+        const { calls } = fakeUserClient({ calificacion: { error: null } });
+
+        await service.calificarCita(user, CITA_ID, { puntuacion: 3 });
+
+        expect(calls).toContainEqual(
+          expect.objectContaining({
+            method: 'insert',
+            args: [
+              expect.objectContaining({ puntuacion_numerica: 3, resena: null }),
+            ],
+          }),
+        );
+      });
+
+      it('valida la nota (entero de 1 a 5) y la reseña (máximo 500) antes de consultar', async () => {
+        const calls = fakeDatabase({});
+
+        for (const bad of [
+          { puntuacion: 0 },
+          { puntuacion: 6 },
+          { puntuacion: 3.5 },
+          { puntuacion: 'cinco' as unknown as number },
+          {} as { puntuacion: number },
+          { puntuacion: 4, resena: 'x'.repeat(501) },
+        ]) {
+          await expect(
+            service.calificarCita(user, CITA_ID, bad),
+          ).rejects.toBeInstanceOf(BadRequestException);
+        }
+        expect(calls).toHaveLength(0);
+      });
+
+      it('solo se califican citas realizadas (409) y propias (404)', async () => {
+        rpcOk();
+        fakeDatabase({
+          cita: { data: { ...realizada, estado: 'confirmada' } },
+        });
+        const { spy } = fakeUserClient({});
+        await expect(
+          service.calificarCita(user, CITA_ID, { puntuacion: 5 }),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(spy).not.toHaveBeenCalled();
+
+        fakeDatabase({ cita: { data: null } });
+        await expect(
+          service.calificarCita(user, CITA_ID, { puntuacion: 5 }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        await expect(
+          service.calificarCita(user, 'x', { puntuacion: 5 }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('una segunda calificación de la misma cita responde 409', async () => {
+        rpcOk();
+        fakeDatabase({ cita: { data: realizada } });
+        fakeUserClient({
+          calificacion: {
+            error: { code: '23505', message: 'duplicate key value' },
+          },
+        });
+
+        await expect(
+          service.calificarCita(user, CITA_ID, { puntuacion: 5 }),
+        ).rejects.toThrow('Ya calificaste esta cita');
+      });
+
+      it('si la base rechaza la calificación, traduce el error', async () => {
+        rpcOk();
+        fakeDatabase({ cita: { data: realizada } });
+        fakeUserClient({
+          calificacion: {
+            error: { message: 'Solo se puede calificar una cita realizada' },
+          },
+        });
+
+        await expect(
+          service.calificarCita(user, CITA_ID, { puntuacion: 5 }),
+        ).rejects.toBeInstanceOf(ConflictException);
       });
     });
   });

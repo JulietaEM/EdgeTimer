@@ -3,70 +3,99 @@ import { Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'r
 import api from '../../api';
 import { PropuestaBanner } from '../../components/PropuestaBanner';
 import { colors, fonts } from '../../theme';
-import type { CitaCliente } from '../../types';
+import type { CitaCliente, CitasClienteResultado } from '../../types';
 import { readError } from '../../utils/errors';
 import { formatMoney, formatShortDate } from '../../utils/format';
-import { CancelarModal, ReprogramarModal } from './ClienteCitaModals';
+import { CalificarModal, CancelarModal, ReprogramarModal } from './ClienteCitaModals';
 
+type Tab = 'proximas' | 'historial';
+
+const PAGE = 20;
 const avatar = require('../../../assets/user.png');
 
-// Agenda del cliente: sus próximas citas con las acciones de cancelar y reprogramar
-// (HU-21). El historial y la calificación llegan con HU-23 y HU-24.
+// Agenda del cliente: próximas citas (cancelar, reprogramar y responder propuestas
+// del barbero) e historial (realizadas, canceladas y rechazadas, con la opción de
+// calificar las realizadas).
 export function ClienteAgendaScreen() {
   const { width } = useWindowDimensions();
   const isCompact = width < 620;
+  const [tab, setTab] = useState<Tab>('proximas');
   const [citas, setCitas] = useState<CitaCliente[]>([]);
+  const [hayMas, setHayMas] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const [cancelando, setCancelando] = useState<CitaCliente | null>(null);
   const [reprogramando, setReprogramando] = useState<CitaCliente | null>(null);
+  const [calificando, setCalificando] = useState<CitaCliente | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (current: Tab, offset = 0) => {
     setError('');
     try {
-      const response = await api.get<CitaCliente[]>('/cliente/citas', {
-        params: { grupo: 'proximas' },
+      const response = await api.get<CitasClienteResultado>('/cliente/citas', {
+        params: { grupo: current, offset, limit: PAGE },
       });
-      setCitas(response.data);
+      setCitas((previous) =>
+        offset === 0 ? response.data.items : [...previous, ...response.data.items],
+      );
+      setHayMas(response.data.hayMas);
     } catch (err) {
       setError(readError(err, 'No fue posible cargar tus citas.'));
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    setLoading(true);
+    setCitas([]);
+    setHayMas(false);
+    load(tab);
+  }, [tab, load]);
+
+  const showToast = (message: string) => {
+    setToast(message);
+    setTimeout(() => setToast(''), 3500);
+  };
 
   const done = (message: string) => {
     setCancelando(null);
     setReprogramando(null);
-    setToast(message);
-    setTimeout(() => setToast(''), 3500);
-    load();
+    setCalificando(null);
+    showToast(message);
+    load(tab);
   };
 
   const respond = async (cita: CitaCliente, action: 'aceptar' | 'rechazar' | 'retirar') => {
     setBusyId(cita.id);
     try {
       const response = await api.patch(`/cliente/citas/${cita.id}/propuesta/${action}`);
-      setToast(response.data.message);
+      showToast(response.data.message);
     } catch (err) {
-      setToast(readError(err, 'No fue posible responder a la propuesta.'));
+      showToast(readError(err, 'No fue posible responder a la propuesta.'));
     } finally {
       setBusyId(null);
-      setTimeout(() => setToast(''), 3500);
-      load();
+      load(tab);
     }
+  };
+
+  const loadMore = () => {
+    setLoadingMore(true);
+    load(tab, citas.length);
   };
 
   return (
     <View>
       <Text style={styles.kicker}>Agenda cliente</Text>
-      <Text style={styles.title}>Mis próximas citas</Text>
+      <Text style={styles.title}>Mis citas</Text>
+
+      <View style={styles.tabs}>
+        <TabButton active={tab === 'proximas'} label="Próximas" onPress={() => setTab('proximas')} />
+        <TabButton active={tab === 'historial'} label="Historial" onPress={() => setTab('historial')} />
+      </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -74,7 +103,9 @@ export function ClienteAgendaScreen() {
         <Text style={styles.empty}>Cargando tus citas...</Text>
       ) : citas.length === 0 && !error ? (
         <Text style={styles.empty}>
-          No tienes citas próximas. Agenda una desde el Home eligiendo a tu barbero.
+          {tab === 'proximas'
+            ? 'No tienes citas próximas. Agenda una desde el Home eligiendo a tu barbero.'
+            : 'Aún no tienes citas en tu historial.'}
         </Text>
       ) : (
         <View style={styles.list}>
@@ -84,21 +115,46 @@ export function ClienteAgendaScreen() {
               cita={cita}
               compact={isCompact}
               busy={busyId === cita.id}
+              historial={tab === 'historial'}
               onAcceptProposal={() => respond(cita, 'aceptar')}
-              onRejectProposal={() => respond(cita, 'rechazar')}
-              onWithdrawProposal={() => respond(cita, 'retirar')}
               onCancel={() => setCancelando(cita)}
+              onRate={() => setCalificando(cita)}
+              onRejectProposal={() => respond(cita, 'rechazar')}
               onReprogram={() => setReprogramando(cita)}
+              onWithdrawProposal={() => respond(cita, 'retirar')}
             />
           ))}
         </View>
       )}
 
+      {tab === 'historial' && hayMas ? (
+        <Pressable disabled={loadingMore} style={styles.moreButton} onPress={loadMore}>
+          <Text style={styles.moreText}>{loadingMore ? 'Cargando...' : 'Ver más'}</Text>
+        </Pressable>
+      ) : null}
+
       <CancelarModal cita={cancelando} onClose={() => setCancelando(null)} onDone={done} />
       <ReprogramarModal cita={reprogramando} onClose={() => setReprogramando(null)} onDone={done} />
+      <CalificarModal cita={calificando} onClose={() => setCalificando(null)} onDone={done} />
 
       {toast ? <Text style={styles.toast}>{toast}</Text> : null}
     </View>
+  );
+}
+
+function TabButton({
+  active,
+  label,
+  onPress,
+}: {
+  active: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable style={[styles.tab, active && styles.tabActive]} onPress={onPress}>
+      <Text style={[styles.tabText, active && styles.tabTextActive]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -106,8 +162,10 @@ function CitaCard({
   cita,
   compact,
   busy,
+  historial,
   onAcceptProposal,
   onCancel,
+  onRate,
   onRejectProposal,
   onReprogram,
   onWithdrawProposal,
@@ -115,12 +173,16 @@ function CitaCard({
   cita: CitaCliente;
   compact: boolean;
   busy: boolean;
+  historial: boolean;
   onAcceptProposal: () => void;
   onCancel: () => void;
+  onRate: () => void;
   onRejectProposal: () => void;
   onReprogram: () => void;
   onWithdrawProposal: () => void;
 }) {
+  const blocked = !cita.puedeModificar || !!cita.propuesta?.puedeResponder;
+
   return (
     <View style={[styles.card, compact && styles.fullWidth]}>
       <View style={styles.barberRow}>
@@ -143,6 +205,7 @@ function CitaCard({
         {formatShortDate(cita.fecha)} · {cita.horaInicio} - {cita.horaFin}
       </Text>
       <Text style={styles.status}>{cita.estadoLabel}</Text>
+      {cita.motivo && historial ? <Text style={styles.note}>Motivo: {cita.motivo}</Text> : null}
       {cita.propuesta ? (
         <PropuestaBanner
           busy={busy}
@@ -155,37 +218,67 @@ function CitaCard({
       ) : null}
       {cita.notas ? <Text style={styles.note}>“{cita.notas}”</Text> : null}
 
-      <View style={styles.actions}>
-        <Pressable
-          disabled={!cita.puedeModificar || !!cita.propuesta?.puedeResponder}
-          style={[
-            styles.primary,
-            (!cita.puedeModificar || !!cita.propuesta?.puedeResponder) && styles.disabled,
-          ]}
-          onPress={onReprogram}
-        >
-          <Text style={styles.primaryText}>Reprogramar</Text>
-        </Pressable>
-        <Pressable
-          disabled={!cita.puedeModificar}
-          style={[styles.ghost, !cita.puedeModificar && styles.disabled]}
-          onPress={onCancel}
-        >
-          <Text style={styles.ghostText}>Cancelar</Text>
-        </Pressable>
-      </View>
-      {!cita.puedeModificar ? (
-        <Text style={styles.help}>
-          Solo puedes cancelar o reprogramar citas con al menos 1 día de antelación.
-        </Text>
-      ) : null}
+      {historial ? (
+        cita.calificacion ? (
+          <View style={styles.rated}>
+            <Text style={styles.ratedStars}>
+              {'★'.repeat(cita.calificacion.puntuacion)}
+              <Text style={styles.ratedOff}>{'★'.repeat(5 - cita.calificacion.puntuacion)}</Text>
+            </Text>
+            {cita.calificacion.resena ? (
+              <Text style={styles.cardText}>“{cita.calificacion.resena}”</Text>
+            ) : null}
+          </View>
+        ) : cita.puedeCalificar ? (
+          <View style={styles.actions}>
+            <Pressable style={styles.primary} onPress={onRate}>
+              <Text style={styles.primaryText}>Calificar esta cita</Text>
+            </Pressable>
+          </View>
+        ) : null
+      ) : (
+        <View>
+          <View style={styles.actions}>
+            <Pressable
+              disabled={blocked}
+              style={[styles.primary, blocked && styles.disabled]}
+              onPress={onReprogram}
+            >
+              <Text style={styles.primaryText}>Reprogramar</Text>
+            </Pressable>
+            <Pressable
+              disabled={!cita.puedeModificar}
+              style={[styles.ghost, !cita.puedeModificar && styles.disabled]}
+              onPress={onCancel}
+            >
+              <Text style={styles.ghostText}>Cancelar</Text>
+            </Pressable>
+          </View>
+          {!cita.puedeModificar ? (
+            <Text style={styles.help}>
+              Solo puedes cancelar o reprogramar citas con al menos 1 día de antelación.
+            </Text>
+          ) : null}
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   kicker: { color: colors.darkGold, fontFamily: fonts.medium, fontSize: 21 },
-  title: { color: colors.black, fontFamily: fonts.title, fontSize: 36, marginBottom: 16 },
+  title: { color: colors.black, fontFamily: fonts.title, fontSize: 36, marginBottom: 12 },
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  tab: {
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  tabActive: { backgroundColor: colors.black, borderColor: colors.black },
+  tabText: { color: colors.gray, fontFamily: fonts.medium, fontSize: 18 },
+  tabTextActive: { color: colors.white },
   empty: { color: colors.gray, fontFamily: fonts.medium, fontSize: 20, marginBottom: 20 },
   error: { color: colors.danger, fontFamily: fonts.medium, fontSize: 18, marginBottom: 12 },
   list: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
@@ -221,6 +314,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   note: { color: colors.gray, fontFamily: fonts.medium, fontSize: 17, marginTop: 4 },
+  rated: { gap: 2, marginTop: 8 },
+  ratedStars: { color: colors.gold, fontSize: 24 },
+  ratedOff: { color: colors.border },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
   primary: {
     backgroundColor: colors.black,
@@ -239,6 +335,16 @@ const styles = StyleSheet.create({
   ghostText: { color: colors.darkGold, fontFamily: fonts.title, fontSize: 16 },
   disabled: { opacity: 0.45 },
   help: { color: colors.muted, fontFamily: fonts.medium, fontSize: 16, marginTop: 6 },
+  moreButton: {
+    alignSelf: 'center',
+    borderColor: colors.gold,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  moreText: { color: colors.darkGold, fontFamily: fonts.title, fontSize: 17 },
   toast: {
     alignSelf: 'center',
     backgroundColor: colors.black,

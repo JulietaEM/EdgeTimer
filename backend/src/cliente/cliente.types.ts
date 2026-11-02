@@ -130,6 +130,10 @@ export interface CitaClienteView {
   puedeModificar: boolean;
   /** Cambio de horario pendiente de respuesta (propio o de la otra parte). */
   propuesta: PropuestaView | null;
+  /** La calificación que dejó el cliente, si ya calificó. */
+  calificacion: { puntuacion: number; resena: string } | null;
+  /** Realizada y todavía sin calificar. */
+  puedeCalificar: boolean;
   barbero: { id: string; nombre: string; foto: string | null };
   barberia: { id: string; nombre: string; direccion: string };
   procedimientos: {
@@ -140,9 +144,25 @@ export interface CitaClienteView {
   }[];
 }
 
-/** `GET /cliente/citas?grupo=proximas` (el historial llega con HU-24). */
+/** `GET /cliente/citas?grupo=proximas|historial` (el historial se pagina). */
 export interface CitasClienteQuery {
   grupo?: string;
+  offset?: string;
+  limit?: string;
+}
+
+export interface CitasClienteResultado {
+  items: CitaClienteView[];
+  /** Hay más citas después de esta página (solo en el historial). */
+  hayMas: boolean;
+}
+
+/** Datos para calificar una cita realizada. */
+export interface CalificarCitaDto {
+  /** Entero de 1 a 5. */
+  puntuacion: number;
+  /** Opcional, máximo 500 caracteres. */
+  resena?: string;
 }
 
 export interface MotivoCitaDto {

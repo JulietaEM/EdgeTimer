@@ -71,6 +71,7 @@ describe('API (e2e, sin base de datos)', () => {
     ['POST', '/cliente/citas'],
     ['GET', '/cliente/citas'],
     ['PATCH', '/cliente/citas/123/cancelar'],
+    ['POST', '/cliente/citas/123/calificar'],
     ['PATCH', '/cliente/citas/123/reprogramar'],
     ['PATCH', '/cliente/citas/123/propuesta/aceptar'],
     ['PATCH', '/cliente/citas/123/propuesta/rechazar'],

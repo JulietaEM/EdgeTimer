@@ -11,6 +11,7 @@ import type { AuthUser } from '../common/auth/auth-user';
 import { CurrentUser, Roles } from '../common/auth/decorators';
 import { ClienteService } from './cliente.service';
 import type {
+  CalificarCitaDto,
   CitasClienteQuery,
   CrearCitaDto,
   DisponibilidadQuery,
@@ -94,5 +95,14 @@ export class ClienteController {
   @Patch('citas/:id/propuesta/retirar')
   retirarPropuesta(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.clienteService.retirarPropuesta(user, id);
+  }
+
+  @Post('citas/:id/calificar')
+  calificar(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: CalificarCitaDto,
+  ) {
+    return this.clienteService.calificarCita(user, id, dto);
   }
 }
