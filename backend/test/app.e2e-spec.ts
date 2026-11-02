@@ -34,11 +34,25 @@ describe('API (e2e, sin base de datos)', () => {
       .expect('Servidor funcionando');
   });
 
+  // Las rutas del dominio antiguo (AlphaCorte) confiaban en el profileId que
+  // enviaba el cliente. Se eliminaron: deben responder 404, no 401.
   it.each([
     ['GET', '/citas'],
+    ['POST', '/citas/solicitar'],
+    ['POST', '/citas/reservar'],
+    ['PATCH', '/citas/123/aceptar'],
     ['GET', '/slots'],
+    ['POST', '/slots'],
     ['GET', '/catalogos/barberos'],
     ['GET', '/catalogos/procedimientos'],
+    ['POST', '/catalogos/barberos/123/foto'],
+  ])('%s %s (ruta antigua) ya no existe (404)', async (method, path) => {
+    const res = await request(app.getHttpServer())
+      [method.toLowerCase() as 'get'](path);
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
     ['GET', '/auth/me'],
     ['PATCH', '/auth/me'],
     ['DELETE', '/auth/me'],

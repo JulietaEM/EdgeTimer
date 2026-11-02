@@ -67,60 +67,6 @@ export type EstadoCita =
   | 'cancelada'
   | 'rechazada';
 
-export interface Procedimiento {
-  id: string;
-  nombre: string;
-  descripcion?: string;
-  precio: number;
-  duracionMinutos: number;
-}
-
-export interface Barbero {
-  id: string;
-  nombre: string;
-  foto: string | null;
-  promedioCalificacion: number;
-  especialidades: Procedimiento[];
-  horarioLaboral: string;
-}
-
-export interface SlotDisponible {
-  id: string;
-  barbero: Pick<Barbero, 'id' | 'nombre' | 'foto' | 'promedioCalificacion'>;
-  inicioAt: string;
-  finAt: string;
-  fecha: string;
-  horaInicio: string;
-  horaFin: string;
-  estado: string;
-}
-
-export interface Cita {
-  id: string;
-  cliente: {
-    id: string;
-    nombre: string;
-    foto: string | null;
-  };
-  barbero: Pick<Barbero, 'id' | 'nombre' | 'foto' | 'promedioCalificacion'>;
-  slotId: string | null;
-  procedimientos: Procedimiento[];
-  costoTotal: number;
-  inicioAt: string;
-  finAt: string;
-  fecha: string;
-  horaInicio: string;
-  horaFin: string;
-  estado: EstadoCita;
-  estadoLabel: string;
-  notas: string;
-  puedeModificar: boolean;
-  calificacion: {
-    puntuacion: number;
-    resena: string;
-  } | null;
-}
-
 export interface ResenaAdmin {
   id: string;
   puntuacion: number;

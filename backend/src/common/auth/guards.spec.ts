@@ -33,7 +33,7 @@ function reflectorReturning(values: Record<string, unknown>) {
   const reflector = new Reflector();
   jest
     .spyOn(reflector, 'getAllAndOverride')
-    .mockImplementation((key) => values[key] as never);
+    .mockImplementation((key) => values[key as string] as never);
   return reflector;
 }
 
