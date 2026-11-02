@@ -285,7 +285,17 @@ export interface CitaCliente {
   /** Abierta y con al menos 1 día de antelación: se puede cancelar o reprogramar. */
   puedeModificar: boolean;
   propuesta: PropuestaCita | null;
+  /** La calificación que dejó el cliente, si ya calificó. */
+  calificacion: { puntuacion: number; resena: string } | null;
+  /** Realizada y todavía sin calificar. */
+  puedeCalificar: boolean;
   barbero: { id: string; nombre: string; foto: string | null };
   barberia: { id: string; nombre: string; direccion: string };
   procedimientos: { id: string; nombre: string; precio: number; duracionMinutos: number }[];
+}
+
+export interface CitasClienteResultado {
+  items: CitaCliente[];
+  /** Hay más citas después de esta página (solo en el historial). */
+  hayMas: boolean;
 }

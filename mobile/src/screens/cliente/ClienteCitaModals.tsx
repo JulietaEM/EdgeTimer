@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import api from '../../api';
 import { FormModal } from '../../components/FormModal';
 import { LabeledInput } from '../../components/LabeledInput';
@@ -211,7 +211,118 @@ export function ReprogramarModal({
   );
 }
 
+/** Nota de 1 a 5 y reseña opcional para una cita realizada. */
+export function CalificarModal({
+  cita,
+  onClose,
+  onDone,
+}: {
+  cita: CitaCliente | null;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [puntuacion, setPuntuacion] = useState(0);
+  const [resena, setResena] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setPuntuacion(0);
+    setResena('');
+    setError('');
+  }, [cita]);
+
+  const submit = async () => {
+    if (!cita) return;
+    if (puntuacion < 1) {
+      setError('Elige una calificación de 1 a 5 estrellas.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    try {
+      const response = await api.post(`/cliente/citas/${cita.id}/calificar`, {
+        puntuacion,
+        resena: resena.trim() || undefined,
+      });
+      onDone(response.data.message);
+    } catch (err) {
+      setError(readError(err, 'No fue posible guardar tu calificación.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <FormModal
+      loading={saving}
+      open={cita !== null}
+      submitLabel="Enviar calificación"
+      title="Calificar cita"
+      onClose={onClose}
+      onSubmit={submit}
+    >
+      <Text style={styles.text}>
+        {cita
+          ? `${cita.barbero.nombre} · ${formatShortDate(cita.fecha)} · ${cita.procedimientos
+              .map((item) => item.nombre)
+              .join(', ')}`
+          : ''}
+      </Text>
+
+      <View style={styles.stars}>
+        {[1, 2, 3, 4, 5].map((value) => (
+          <Pressable
+            key={value}
+            accessibilityLabel={`${value} ${value === 1 ? 'estrella' : 'estrellas'}`}
+            accessibilityRole="button"
+            onPress={() => setPuntuacion(value)}
+          >
+            <Text style={[styles.star, value <= puntuacion && styles.starOn]}>★</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.label}>Tu opinión (opcional)</Text>
+      <TextInput
+        maxLength={500}
+        multiline
+        placeholder="Cuéntanos cómo te fue"
+        placeholderTextColor={colors.muted}
+        style={styles.review}
+        value={resena}
+        onChangeText={setResena}
+      />
+      <Text style={styles.counter}>{resena.length}/500</Text>
+
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+    </FormModal>
+  );
+}
+
 const styles = StyleSheet.create({
+  stars: { flexDirection: 'row', gap: 6, marginVertical: 8 },
+  star: { color: colors.border, fontSize: 40 },
+  starOn: { color: colors.gold },
+  review: {
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: colors.black,
+    fontFamily: fonts.medium,
+    fontSize: 18,
+    minHeight: 96,
+    padding: 12,
+    textAlignVertical: 'top',
+  },
+  counter: {
+    alignSelf: 'flex-end',
+    color: colors.muted,
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    marginTop: 4,
+  },
   text: { color: colors.gray, fontFamily: fonts.medium, fontSize: 18, marginBottom: 10 },
   notice: {
     backgroundColor: colors.softGold,

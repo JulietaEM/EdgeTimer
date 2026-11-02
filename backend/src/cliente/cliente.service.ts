@@ -6,7 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { isUuid } from '../admin/admin.utils';
+import { isUuid, parsePage } from '../admin/admin.utils';
 import { optionalText } from '../auth/auth.validation';
 import { bogotaDate, bogotaHour, toInstant } from '../barbero/barbero.utils';
 import type { AuthUser } from '../common/auth/auth-user';
@@ -33,8 +33,10 @@ import type {
   BarberiaView,
   BarberoListItem,
   BarberoPerfilView,
+  CalificarCitaDto,
   CitaClienteView,
   CitasClienteQuery,
+  CitasClienteResultado,
   CrearCitaDto,
   EstadoCitaCliente,
   MotivoCitaDto,
@@ -71,7 +73,8 @@ const CITA_SELECT = `
     precio_aplicado,
     duracion_minutos_aplicada,
     procedimiento:procedimiento(id_procedimiento, nombre)
-  )
+  ),
+  calificacion(puntuacion_numerica, resena)
 `;
 
 const ESTADO_LABEL: Record<EstadoCitaCliente, string> = {
@@ -130,6 +133,7 @@ interface CitaRow {
     duracion_minutos_aplicada: number;
     procedimiento: One<{ id_procedimiento: string; nombre: string }>;
   }[];
+  calificacion?: One<{ puntuacion_numerica: number; resena: string | null }>;
 }
 
 /** Lo mínimo de una cita para decidir si se puede cancelar o reprogramar. */
@@ -631,36 +635,109 @@ export class ClienteService {
   // HU-21: reprogramar o cancelar con 1 día de antelación
   // ---------------------------------------------------------------------
 
-  /** Citas abiertas del cliente que aún no terminan (el historial llega con HU-24). */
+  /**
+   * - proximas: citas abiertas (pendientes o confirmadas) que aún no terminan.
+   * - historial: realizadas, canceladas y rechazadas (incluye las vencidas),
+   *   de la más reciente a la más antigua, paginado.
+   */
   async listCitas(
     user: AuthUser,
     query: CitasClienteQuery,
-  ): Promise<CitaClienteView[]> {
-    if ((query?.grupo ?? 'proximas') !== 'proximas') {
+  ): Promise<CitasClienteResultado> {
+    const grupo = query?.grupo ?? 'proximas';
+    if (grupo !== 'proximas' && grupo !== 'historial') {
       throw new BadRequestException('El grupo de citas no es válido');
     }
 
-    // Las solicitudes cuya hora ya pasó se vencen antes de listar.
+    const { offset, limit } = parsePage(query?.offset, query?.limit);
+
+    // Las solicitudes cuya hora ya pasó se vencen y las citas terminadas pasan a
+    // realizadas antes de listar.
     await markPastCitas(this.logger);
 
-    const { data, error } = await supabaseAdmin
+    let request = supabaseAdmin
       .from('cita')
       .select(CITA_SELECT)
-      .eq('id_cliente', user.profileId)
-      .in('estado', ['pendiente', 'confirmada'])
-      .gte('fin_at', this.now().toISOString())
-      .order('inicio_at', { ascending: true });
+      .eq('id_cliente', user.profileId);
+
+    if (grupo === 'proximas') {
+      request = request
+        .in('estado', ['pendiente', 'confirmada'])
+        .gte('fin_at', this.now().toISOString())
+        .order('inicio_at', { ascending: true })
+        .limit(200);
+    } else {
+      request = request
+        .in('estado', ['realizada', 'cancelada', 'rechazada'])
+        .order('inicio_at', { ascending: false })
+        .range(offset, offset + limit);
+    }
+
+    const { data, error } = await request;
 
     if (error) {
       throw new InternalServerErrorException(error.message);
     }
 
     const rows = (data ?? []) as unknown as CitaRow[];
-    const propuestas = await loadPendientes(rows.map((row) => row.id_cita));
+    const page = grupo === 'historial' ? rows.slice(0, limit) : rows;
+    const propuestas = await loadPendientes(page.map((row) => row.id_cita));
 
-    return Promise.all(
-      rows.map((row) => this.toCitaView(row, propuestas.get(row.id_cita))),
-    );
+    return {
+      items: await Promise.all(
+        page.map((row) => this.toCitaView(row, propuestas.get(row.id_cita))),
+      ),
+      hayMas: grupo === 'historial' && rows.length > limit,
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // HU-23: calificar una cita realizada
+  // ---------------------------------------------------------------------
+
+  /**
+   * Una calificación por cita, solo si ya fue realizada: nota de 1 a 5 y reseña
+   * opcional (máximo 500 caracteres). Se escribe con el token del cliente; un
+   * trigger de la base recalcula el promedio del barbero.
+   */
+  async calificarCita(user: AuthUser, id: string, dto: CalificarCitaDto) {
+    const puntuacion = Number(dto?.puntuacion);
+    if (!Number.isInteger(puntuacion) || puntuacion < 1 || puntuacion > 5) {
+      throw new BadRequestException('La calificación debe estar entre 1 y 5');
+    }
+    const resena = optionalText(dto?.resena, 500);
+
+    // Una cita confirmada que ya terminó pasa a realizada al listar; se hace aquí
+    // también por si el cliente califica sin haber recargado su historial.
+    await markPastCitas(this.logger);
+    const cita = await this.findCitaPropia(user, id);
+
+    if (cita.estado !== 'realizada') {
+      throw new ConflictException('Solo puedes calificar una cita realizada');
+    }
+
+    const { error } = await createSupabaseUserClient(user.accessToken)
+      .from('calificacion')
+      .insert({
+        id_cita: id,
+        puntuacion_numerica: puntuacion,
+        resena,
+      });
+
+    if (error) {
+      if (error.code === '23505') {
+        throw new ConflictException('Ya calificaste esta cita');
+      }
+      if (/realizada/i.test(error.message)) {
+        throw new ConflictException('Solo puedes calificar una cita realizada');
+      }
+      throw mapCitaError(error.message, 'cliente');
+    }
+
+    return {
+      message: '¡Gracias por tu calificación!',
+      cita: await this.getCita(user, id),
+    };
   }
 
   async cancelarCita(user: AuthUser, id: string, dto: MotivoCitaDto) {
@@ -914,6 +991,7 @@ export class ClienteService {
     });
     const barbero = first(row.barbero);
     const barberia = first(row.barberia);
+    const calificacion = first(row.calificacion);
     const vencida =
       row.estado === 'rechazada' && row.motivo_estado === EXPIRED_REASON;
 
@@ -935,6 +1013,13 @@ export class ClienteService {
       notas: row.notas_cliente ?? '',
       motivo: row.motivo_estado,
       puedeModificar: this.canModify(row.estado, row.inicio_at),
+      calificacion: calificacion
+        ? {
+            puntuacion: Number(calificacion.puntuacion_numerica),
+            resena: calificacion.resena ?? '',
+          }
+        : null,
+      puedeCalificar: row.estado === 'realizada' && !calificacion,
       propuesta: toPropuestaView(
         propuestaVigente(row, propuesta, this.now()),
         'cliente',
