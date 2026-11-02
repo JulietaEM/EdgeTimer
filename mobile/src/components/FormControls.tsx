@@ -65,23 +65,6 @@ export function PrimaryButton({
   );
 }
 
-export function SecondaryButton({
-  label,
-  onPress,
-}: {
-  label: string;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
-    >
-      <Text style={styles.secondaryText}>{label}</Text>
-    </Pressable>
-  );
-}
-
 export function Checkbox({
   checked,
   children,
@@ -183,16 +166,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
-  secondaryButton: {
-    minHeight: 56,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.gold,
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
   disabledButton: {
     opacity: 0.7,
   },
@@ -201,11 +174,6 @@ const styles = StyleSheet.create({
   },
   primaryText: {
     color: colors.white,
-    fontSize: 18,
-    fontFamily: fonts.title,
-  },
-  secondaryText: {
-    color: colors.darkGold,
     fontSize: 18,
     fontFamily: fonts.title,
   },
