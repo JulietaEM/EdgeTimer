@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fonts } from '../theme';
+import { NotificationBell } from './NotificationBell';
 import type { AppScreen, Role } from '../types';
 
 const logo = require('../../assets/icon.png');
@@ -105,12 +106,20 @@ export function AppShell({
                   {brandName}
                 </Text>
               </View>
-              <Pressable
-                onPress={() => setMenuOpen((current) => !current)}
-                style={styles.menuToggle}
-              >
-                <Text style={styles.menuToggleText}>{menuOpen ? 'Cerrar' : 'Menu'}</Text>
-              </Pressable>
+              <View style={styles.mobileActions}>
+                <NotificationBell />
+                <Pressable
+                  onPress={() => setMenuOpen((current) => !current)}
+                  style={styles.menuToggle}
+                >
+                  <Text style={styles.menuToggleText}>{menuOpen ? 'Cerrar' : 'Menu'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+          {isDesktop && (
+            <View style={styles.topBar}>
+              <NotificationBell />
             </View>
           )}
           {!isDesktop && menuOpen ? menu : null}
@@ -254,6 +263,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  mobileActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  topBar: {
+    alignItems: 'flex-end',
+    paddingHorizontal: 24,
+    paddingTop: 16,
   },
   menuToggle: {
     borderRadius: 8,
