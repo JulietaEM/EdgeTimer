@@ -47,8 +47,9 @@ describe('API (e2e, sin base de datos)', () => {
     ['GET', '/catalogos/procedimientos'],
     ['POST', '/catalogos/barberos/123/foto'],
   ])('%s %s (ruta antigua) ya no existe (404)', async (method, path) => {
-    const res = await request(app.getHttpServer())
-      [method.toLowerCase() as 'get'](path);
+    const res = await request(app.getHttpServer())[
+      method.toLowerCase() as 'get'
+    ](path);
     expect(res.status).toBe(404);
   });
 
@@ -90,6 +91,12 @@ describe('API (e2e, sin base de datos)', () => {
     ['PATCH', '/cliente/citas/123/propuesta/aceptar'],
     ['PATCH', '/cliente/citas/123/propuesta/rechazar'],
     ['PATCH', '/cliente/citas/123/propuesta/retirar'],
+    ['GET', '/notificaciones'],
+    ['GET', '/notificaciones/config'],
+    ['POST', '/notificaciones/suscripcion'],
+    ['POST', '/notificaciones/suscripcion/baja'],
+    ['POST', '/notificaciones/leer-todas'],
+    ['PATCH', '/notificaciones/123/leer'],
   ])('%s %s exige token (401)', (method, path) => {
     return request(app.getHttpServer())
       [method.toLowerCase() as 'get'](path)
@@ -140,5 +147,35 @@ describe('API (e2e, sin base de datos)', () => {
         aceptaTerminos: true,
       })
       .expect(400);
+  });
+
+  describe('POST /notificaciones/recordatorios (lo llama el job, sin token de usuario)', () => {
+    const guardado = process.env.CRON_SECRET;
+
+    afterEach(() => {
+      process.env.CRON_SECRET = guardado;
+      if (guardado === undefined) delete process.env.CRON_SECRET;
+    });
+
+    it('sin CRON_SECRET configurado responde 503 (nunca queda abierto)', () => {
+      delete process.env.CRON_SECRET;
+
+      return request(app.getHttpServer())
+        .post('/notificaciones/recordatorios')
+        .set('x-cron-secret', 'lo-que-sea')
+        .expect(503);
+    });
+
+    it.each([[undefined], ['incorrecto']])(
+      'con el secreto %p responde 401',
+      (secreto) => {
+        process.env.CRON_SECRET = 'secreto-del-job';
+        const req = request(app.getHttpServer()).post(
+          '/notificaciones/recordatorios',
+        );
+
+        return (secreto ? req.set('x-cron-secret', secreto) : req).expect(401);
+      },
+    );
   });
 });

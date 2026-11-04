@@ -245,3 +245,13 @@ export interface CitasClienteResultado {
   /** Hay más citas después de esta página (solo en el historial). */
   hayMas: boolean;
 }
+
+export interface Notificacion {
+  id: string;
+  titulo: string;
+  mensaje: string;
+  idCita: string | null;
+  tipo: string;
+  leida: boolean;
+  creadaAt: string;
+}

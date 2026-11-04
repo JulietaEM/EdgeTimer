@@ -24,6 +24,7 @@ import {
 } from '../common/reprogramacion';
 import { EXPIRED_REASON, markPastCitas } from '../common/maintenance';
 import { first, type One } from '../common/postgrest';
+import { NotificacionesService } from '../notificaciones/notificaciones.service';
 import {
   createSupabaseUserClient,
   getSignedStorageUrl,
@@ -175,6 +176,8 @@ interface ResenaRow {
 @Injectable()
 export class ClienteService {
   private readonly logger = new Logger(ClienteService.name);
+
+  constructor(private readonly notificaciones: NotificacionesService) {}
 
   // ---------------------------------------------------------------------
   // HU-17: elegir barbería y barbero
@@ -601,6 +604,8 @@ export class ClienteService {
       throw mapCitaError(errProcedimientos.message, 'cliente');
     }
 
+    await this.notificaciones.citaEvento(idCita, 'solicitada', 'cliente');
+
     return {
       message: 'Solicitud enviada. Espera la confirmación del barbero.',
       cita: await this.getCita(user, idCita),
@@ -750,6 +755,8 @@ export class ClienteService {
       motivo_estado: motivo,
     });
 
+    await this.notificaciones.citaEvento(id, 'cancelada', 'cliente');
+
     return { message: 'Cita cancelada', cita: await this.getCita(user, id) };
   }
 
@@ -777,6 +784,7 @@ export class ClienteService {
         horaInicio: dto?.horaInicio,
         now,
       });
+      await this.notificaciones.citaEvento(id, 'propuesta', 'cliente');
 
       return {
         message:
@@ -822,6 +830,8 @@ export class ClienteService {
       ).toISOString(),
     });
 
+    await this.notificaciones.citaEvento(id, 'reprogramada', 'cliente');
+
     return {
       message: 'Cita reprogramada',
       cita: await this.getCita(user, id),
@@ -840,6 +850,8 @@ export class ClienteService {
       now: this.now(),
     });
 
+    await this.notificaciones.citaEvento(id, 'reprogramada', 'cliente');
+
     return {
       message: 'Aceptaste el nuevo horario. Tu cita fue reprogramada.',
       cita: await this.getCita(user, id),
@@ -850,6 +862,8 @@ export class ClienteService {
   async rechazarPropuesta(user: AuthUser, id: string) {
     const cita = await this.findCitaPropia(user, id);
     await rechazar('cliente', cita);
+
+    await this.notificaciones.citaEvento(id, 'propuesta_rechazada', 'cliente');
 
     return {
       message: 'Rechazaste el cambio. Tu cita sigue en su horario original.',

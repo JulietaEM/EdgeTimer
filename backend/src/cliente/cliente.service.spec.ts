@@ -11,6 +11,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 
 import * as supabase from '../supabase';
 import type { AuthUser } from '../common/auth/auth-user';
+import type { NotificacionesService } from '../notificaciones/notificaciones.service';
 import { ClienteService } from './cliente.service';
 
 const BARBERIA_ID = '22222222-2222-4222-8222-222222222222';
@@ -88,9 +89,13 @@ const inactivo = {
 
 describe('ClienteService (HU-17)', () => {
   let service: ClienteService;
+  let notificaciones: { citaEvento: jest.Mock };
 
   beforeEach(() => {
-    service = new ClienteService();
+    notificaciones = { citaEvento: jest.fn().mockResolvedValue(undefined) };
+    service = new ClienteService(
+      notificaciones as unknown as NotificacionesService,
+    );
   });
 
   afterEach(() => {
@@ -723,6 +728,11 @@ describe('ClienteService (HU-17)', () => {
         barbero: { id: BARBERO_ID, nombre: 'Carlos', foto: null },
         barberia: { nombre: 'AlphaCorte', direccion: '' },
       });
+      expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+        expect.any(String),
+        'solicitada',
+        'cliente',
+      );
     });
 
     it('guarda las notas recortadas', async () => {
@@ -758,6 +768,7 @@ describe('ClienteService (HU-17)', () => {
         ConflictException,
       );
       expect(spy).not.toHaveBeenCalled();
+      expect(notificaciones.citaEvento).not.toHaveBeenCalled();
     });
 
     it('rechaza una hora que no es de la disponibilidad (fuera del horario)', async () => {
@@ -843,6 +854,7 @@ describe('ClienteService (HU-17)', () => {
           args: filter,
         });
       }
+      expect(notificaciones.citaEvento).not.toHaveBeenCalled();
     });
 
     it('rechaza procedimientos que el barbero no ofrece', async () => {
@@ -1132,6 +1144,11 @@ describe('ClienteService (HU-17)', () => {
         expect(result.message).toBe('Cita cancelada');
         expect(result.cita.estado).toBe('cancelada');
         expect(result.cita.puedeModificar).toBe(false);
+        expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+          expect.any(String),
+          'cancelada',
+          'cliente',
+        );
       });
 
       it('con menos de 1 día de antelación responde 400 sin escribir', async () => {
@@ -1149,6 +1166,7 @@ describe('ClienteService (HU-17)', () => {
           'al menos 1 día de antelación',
         );
         expect(spy).not.toHaveBeenCalled();
+        expect(notificaciones.citaEvento).not.toHaveBeenCalled();
       });
 
       it('no cancela una cita que ya no está abierta ni una ajena', async () => {
@@ -1265,6 +1283,11 @@ describe('ClienteService (HU-17)', () => {
             (call) => call.method === 'neq' && call.args[1] === CITA_ID,
           ),
         ).toHaveLength(2);
+        expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+          expect.any(String),
+          'propuesta',
+          'cliente',
+        );
       });
 
       it('una solicitud pendiente sigue pendiente (no se manda estado)', async () => {
@@ -1278,6 +1301,11 @@ describe('ClienteService (HU-17)', () => {
         const update = calls.find((call) => call.method === 'update');
         expect(update?.args[0]).not.toHaveProperty('estado');
         expect(result.message).toBe('Cita reprogramada');
+        expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+          expect.any(String),
+          'reprogramada',
+          'cliente',
+        );
       });
 
       it('no deja reprogramar a una hora ocupada: 409 sin escribir', async () => {
@@ -1459,6 +1487,11 @@ describe('ClienteService (HU-17)', () => {
         expect(result.cita.horaInicio).toBe('09:00');
         expect(result.cita.estado).toBe('confirmada');
         expect(result.cita.propuesta).toBeNull();
+        expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+          expect.any(String),
+          'reprogramada',
+          'cliente',
+        );
       });
 
       it('rechazar deja la cita como estaba', async () => {
@@ -1482,6 +1515,11 @@ describe('ClienteService (HU-17)', () => {
         expect(spy).not.toHaveBeenCalled();
         expect(result.message).toContain('Rechazaste');
         expect(result.cita.horaInicio).toBe('08:00');
+        expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+          expect.any(String),
+          'propuesta_rechazada',
+          'cliente',
+        );
       });
 
       it('no se puede responder una propuesta ajena de otro cliente (404) ni retirar la del barbero (403)', async () => {

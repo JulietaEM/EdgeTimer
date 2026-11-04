@@ -26,3 +26,19 @@ export const normalizeTimeInput = (value: string) => {
 
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 };
+
+/** "hace 5 min", "hace 2 h" o la fecha corta si ya pasó más de un día. */
+export const formatAgo = (iso: string) => {
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60000);
+
+  if (minutes < 1) return 'ahora';
+  if (minutes < 60) return `hace ${minutes} min`;
+  if (minutes < 24 * 60) return `hace ${Math.floor(minutes / 60)} h`;
+
+  return new Date(iso).toLocaleDateString('es-CO', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'America/Bogota',
+  });
+};

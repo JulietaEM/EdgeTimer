@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AppShell } from './src/components/AppShell';
+import { disableWebPush } from './src/notifications/webPush';
 import api, {
   API_URL,
   getAccessToken,
@@ -129,9 +130,12 @@ function AppContent() {
     // Se invalida el token en el servidor sin esperar la respuesta.
     const token = getAccessToken();
     if (token) {
-      api
-        .post('/auth/logout', null, { headers: { Authorization: `Bearer ${token}` } })
-        .catch(() => undefined);
+      // En un navegador compartido, el siguiente usuario no debe recibir los avisos de este.
+      void disableWebPush(token).finally(() =>
+        api
+          .post('/auth/logout', null, { headers: { Authorization: `Bearer ${token}` } })
+          .catch(() => undefined),
+      );
     }
     endSession();
   };

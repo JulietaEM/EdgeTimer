@@ -12,6 +12,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
 
 import { AccountsService } from '../common/accounts.service';
 import type { AuthUser } from '../common/auth/auth-user';
+import type { NotificacionesService } from '../notificaciones/notificaciones.service';
 import * as supabase from '../supabase';
 import { fakeAdmin, fakeUser } from '../test-utils/fake-supabase';
 import { BarberoService } from './barbero.service';
@@ -90,12 +91,17 @@ const inDays = (days: number, hour = 10) => {
 
 describe('BarberoService', () => {
   let accounts: AccountsService;
+  let notificaciones: { citaEvento: jest.Mock };
   let service: BarberoService;
 
   beforeEach(() => {
     accounts = new AccountsService();
     jest.spyOn(accounts, 'audit').mockResolvedValue(undefined);
-    service = new BarberoService(accounts);
+    notificaciones = { citaEvento: jest.fn().mockResolvedValue(undefined) };
+    service = new BarberoService(
+      accounts,
+      notificaciones as unknown as NotificacionesService,
+    );
   });
 
   afterEach(() => {
@@ -324,6 +330,11 @@ describe('BarberoService', () => {
       expect(supabase.createSupabaseUserClient).toHaveBeenCalledWith(
         'token-barbero',
       );
+      expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+        CITA_ID,
+        'confirmada',
+        'barbero',
+      );
     });
 
     it('solo acepta solicitudes pendientes (409)', async () => {
@@ -332,6 +343,7 @@ describe('BarberoService', () => {
       await expect(service.aceptar(barbero, CITA_ID)).rejects.toBeInstanceOf(
         ConflictException,
       );
+      expect(notificaciones.citaEvento).not.toHaveBeenCalled();
     });
 
     it('no acepta una solicitud que ya venció (400)', async () => {
@@ -357,6 +369,11 @@ describe('BarberoService', () => {
         method: 'update',
         args: [{ estado: 'rechazada', motivo_estado: 'No trabajo ese día' }],
       });
+      expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+        CITA_ID,
+        'rechazada',
+        'barbero',
+      );
     });
 
     it('no encuentra citas de otro barbero o con id inválido (404)', async () => {
@@ -548,6 +565,11 @@ describe('BarberoService', () => {
       expect(
         JSON.stringify((accounts.audit as jest.Mock).mock.calls),
       ).toContain('proponer_reprogramacion');
+      expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+        CITA_ID,
+        'propuesta',
+        'barbero',
+      );
     });
 
     it('una solicitud pendiente no se reprograma: se acepta o se rechaza', async () => {
@@ -662,6 +684,11 @@ describe('BarberoService', () => {
         args: [expect.objectContaining({ estado: 'aceptada' })],
       });
       expect(result.message).toContain('Aceptaste');
+      expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+        CITA_ID,
+        'reprogramada',
+        'barbero',
+      );
     });
 
     it('no puede aceptar ni rechazar su propia propuesta (403)', async () => {
@@ -705,6 +732,11 @@ describe('BarberoService', () => {
       });
       expect(spy).not.toHaveBeenCalled();
       expect(result.message).toContain('Rechazaste');
+      expect(notificaciones.citaEvento).toHaveBeenCalledWith(
+        CITA_ID,
+        'propuesta_rechazada',
+        'barbero',
+      );
     });
 
     it('retira su propia propuesta, pero no la del cliente', async () => {

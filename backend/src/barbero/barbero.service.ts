@@ -23,6 +23,7 @@ import {
   type PropuestaRow,
 } from '../common/reprogramacion';
 import { first, type One } from '../common/postgrest';
+import { NotificacionesService } from '../notificaciones/notificaciones.service';
 import {
   createSupabaseUserClient,
   getSignedStorageUrl,
@@ -100,7 +101,10 @@ const ESTADO_LABEL: Record<string, string> = {
 export class BarberoService {
   private readonly logger = new Logger(BarberoService.name);
 
-  constructor(private readonly accounts: AccountsService) {}
+  constructor(
+    private readonly accounts: AccountsService,
+    private readonly notificaciones: NotificacionesService,
+  ) {}
 
   // ---------------------------------------------------------------------
   // Disponibilidad (RF-12)
@@ -349,6 +353,7 @@ export class BarberoService {
 
     await this.updateAsBarbero(user, id, { estado: 'confirmada' });
     await this.auditCita(user, id, 'aceptar_cita', {});
+    await this.notificaciones.citaEvento(id, 'confirmada', 'barbero');
 
     return {
       message: 'Solicitud aceptada',
@@ -371,6 +376,7 @@ export class BarberoService {
       motivo_estado: motivo,
     });
     await this.auditCita(user, id, 'rechazar_cita', { motivo });
+    await this.notificaciones.citaEvento(id, 'rechazada', 'barbero');
 
     return {
       message: 'Solicitud rechazada',
@@ -391,6 +397,7 @@ export class BarberoService {
       motivo_estado: motivo,
     });
     await this.auditCita(user, id, 'cancelar_cita', { motivo });
+    await this.notificaciones.citaEvento(id, 'cancelada', 'barbero');
 
     return { message: 'Cita cancelada', cita: await this.getCita(user, id) };
   }
@@ -431,6 +438,7 @@ export class BarberoService {
       fecha: dto.fecha,
       horaInicio: dto.horaInicio,
     });
+    await this.notificaciones.citaEvento(id, 'propuesta', 'barbero');
 
     return {
       message:
@@ -452,6 +460,7 @@ export class BarberoService {
       now: this.now(),
     });
     await this.auditCita(user, id, 'aceptar_reprogramacion', {});
+    await this.notificaciones.citaEvento(id, 'reprogramada', 'barbero');
 
     return {
       message: 'Aceptaste el nuevo horario. La cita fue reprogramada.',
@@ -465,6 +474,7 @@ export class BarberoService {
 
     await rechazar('barbero', cita);
     await this.auditCita(user, id, 'rechazar_reprogramacion', {});
+    await this.notificaciones.citaEvento(id, 'propuesta_rechazada', 'barbero');
 
     return {
       message: 'Rechazaste el cambio. La cita sigue en su horario original.',
