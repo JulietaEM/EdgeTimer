@@ -1,0 +1,705 @@
+From 48c51c1937085300fdc550091c4b51660d82ae43 Mon Sep 17 00:00:00 2001
+From: Codex <codex@localhost>
+Date: Fri, 6 Nov 2026 18:42:39 -0500
+Subject: [PATCH] Add PayU sandbox payment creation
+
+---
+ backend/.env.example                          |  11 +
+ backend/README.md                             |  13 +
+ backend/src/app.module.ts                     |   2 +
+ backend/src/pagos/pagos.controller.ts         |  19 ++
+ backend/src/pagos/pagos.module.ts             |   9 +
+ backend/src/pagos/pagos.service.spec.ts       | 218 ++++++++++++++
+ backend/src/pagos/pagos.service.ts            | 282 ++++++++++++++++++
+ .../migrations/20261106234719_pagos_payu.sql  |  61 ++++
+ 8 files changed, 615 insertions(+)
+ create mode 100644 backend/.env.example
+ create mode 100644 backend/src/pagos/pagos.controller.ts
+ create mode 100644 backend/src/pagos/pagos.module.ts
+ create mode 100644 backend/src/pagos/pagos.service.spec.ts
+ create mode 100644 backend/src/pagos/pagos.service.ts
+ create mode 100644 backend/supabase/migrations/20261106234719_pagos_payu.sql
+
+diff --git a/backend/.env.example b/backend/.env.example
+new file mode 100644
+index 0000000..1b26af7
+--- /dev/null
++++ b/backend/.env.example
+@@ -0,0 +1,11 @@
++# PayU Latam WebCheckout - Sandbox Colombia
++# Completar estas variables en backend/.env y en el servicio de Render.
++PAYU_MERCHANT_ID=
++PAYU_API_LOGIN=
++PAYU_API_KEY=
++PAYU_PUBLIC_KEY=
++PAYU_ACCOUNT_ID_CO=
++PAYU_CHECKOUT_URL=https://sandbox.checkout.payulatam.com/ppp-web-gateway-payu/
++PAYU_QUERY_URL=https://sandbox.api.payulatam.com/reports-api/4.0/service.cgi
++PAYU_CONFIRMATION_URL=
++PAYU_RESPONSE_URL=
+diff --git a/backend/README.md b/backend/README.md
+index 8f0f65f..309811e 100644
+--- a/backend/README.md
++++ b/backend/README.md
+@@ -59,6 +59,19 @@ $ npm run test:cov
+ 
+ ## Deployment
+ 
++### PayU Latam (sandbox)
++
++La Entrega A registra un intento de pago pendiente y prepara los campos del
++formulario WebCheckout. El backend calcula el valor desde los precios aplicados
++a la cita; el cliente no envía el monto. Configura las variables de
++`backend/.env.example` en `backend/.env` y en Render. El endpoint autenticado es
++`POST /pagos/citas/:idCita/checkout` y solo admite citas confirmadas del cliente.
++
++El endpoint siempre debe apuntar al sandbox mientras el flujo de pagos esté en
++pruebas. Las credenciales públicas compartidas por PayU son solo para sandbox;
++no habilitan cobros reales. La confirmación de PayU y la consulta servidor a
++servidor se implementan en la siguiente entrega.
++
+ When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+ 
+ If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+diff --git a/backend/src/app.module.ts b/backend/src/app.module.ts
+index c520a48..3192962 100644
+--- a/backend/src/app.module.ts
++++ b/backend/src/app.module.ts
+@@ -7,6 +7,7 @@ import { AppService } from './app.service';
+ import { AuthModule } from './auth/auth.module';
+ import { BarberoModule } from './barbero/barbero.module';
+ import { ClienteModule } from './cliente/cliente.module';
++import { PagosModule } from './pagos/pagos.module';
+ import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
+ import { RolesGuard } from './common/auth/roles.guard';
+ 
+@@ -17,6 +18,7 @@ import { RolesGuard } from './common/auth/roles.guard';
+     AdminModule,
+     BarberoModule,
+     ClienteModule,
++    PagosModule,
+   ],
+   controllers: [AppController],
+   providers: [
+diff --git a/backend/src/pagos/pagos.controller.ts b/backend/src/pagos/pagos.controller.ts
+new file mode 100644
+index 0000000..63e6752
+--- /dev/null
++++ b/backend/src/pagos/pagos.controller.ts
+@@ -0,0 +1,19 @@
++import { Controller, Param, Post } from '@nestjs/common';
++import type { AuthUser } from '../common/auth/auth-user';
++import { CurrentUser, Roles } from '../common/auth/decorators';
++import { PagosService } from './pagos.service';
++
++/** Los pagos del flujo WebCheckout se crean únicamente desde la cuenta cliente. */
++@Controller('pagos')
++@Roles('cliente')
++export class PagosController {
++  constructor(private readonly pagosService: PagosService) {}
++
++  @Post('citas/:idCita/checkout')
++  crearCheckout(
++    @CurrentUser() user: AuthUser,
++    @Param('idCita') idCita: string,
++  ) {
++    return this.pagosService.crearCheckout(user, idCita);
++  }
++}
+diff --git a/backend/src/pagos/pagos.module.ts b/backend/src/pagos/pagos.module.ts
+new file mode 100644
+index 0000000..89276e2
+--- /dev/null
++++ b/backend/src/pagos/pagos.module.ts
+@@ -0,0 +1,9 @@
++import { Module } from '@nestjs/common';
++import { PagosController } from './pagos.controller';
++import { PagosService } from './pagos.service';
++
++@Module({
++  controllers: [PagosController],
++  providers: [PagosService],
++})
++export class PagosModule {}
+diff --git a/backend/src/pagos/pagos.service.spec.ts b/backend/src/pagos/pagos.service.spec.ts
+new file mode 100644
+index 0000000..30ce79e
+--- /dev/null
++++ b/backend/src/pagos/pagos.service.spec.ts
+@@ -0,0 +1,218 @@
++import {
++  BadRequestException,
++  ConflictException,
++  NotFoundException,
++} from '@nestjs/common';
++import { createHmac } from 'node:crypto';
++
++process.env.SUPABASE_URL = 'http://localhost:54321';
++process.env.SUPABASE_KEY = 'anon-key';
++process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key';
++process.env.PAYU_MERCHANT_ID = '508029';
++process.env.PAYU_ACCOUNT_ID_CO = '512321';
++process.env.PAYU_API_KEY = 'test-api-key';
++process.env.PAYU_CONFIRMATION_URL =
++  'https://backend.example.com/pagos/confirmacion';
++process.env.PAYU_RESPONSE_URL = 'https://app.example.com/agenda?pago=resultado';
++
++import type { AuthUser } from '../common/auth/auth-user';
++import { fakeAdmin } from '../test-utils/fake-supabase';
++import { PagosService } from './pagos.service';
++
++const CITA_ID = '11111111-1111-4111-8111-111111111111';
++const CLIENTE_ID = '22222222-2222-4222-8222-222222222222';
++const USER_ID = '33333333-3333-4333-8333-333333333333';
++
++const user: AuthUser = {
++  userId: USER_ID,
++  role: 'cliente',
++  profileId: CLIENTE_ID,
++  idBarberia: null,
++  nombre: 'Julieta Pérez',
++  email: 'julieta@example.com',
++  accessToken: 'access-token',
++  mustChangePassword: false,
++};
++
++const cita = {
++  id_cita: CITA_ID,
++  id_cliente: CLIENTE_ID,
++  estado: 'confirmada',
++  cita_procedimiento: [
++    { precio_aplicado: '25000.00' },
++    { precio_aplicado: '15000.00' },
++  ],
++};
++
++const pendingPayment = {
++  id_pago: '44444444-4444-4444-8444-444444444444',
++  id_cita: CITA_ID,
++  referencia: `ET-${CITA_ID}-test`,
++  monto: '40000.00',
++  moneda: 'COP',
++  estado: 'pendiente' as const,
++};
++
++describe('PagosService', () => {
++  let service: PagosService;
++
++  beforeEach(() => {
++    service = new PagosService();
++  });
++
++  afterEach(() => {
++    jest.restoreAllMocks();
++  });
++
++  it('calcula el total con precios aplicados y devuelve formulario HMAC de sandbox', async () => {
++    const calls = fakeAdmin({
++      cita: { data: cita },
++      pago: [{ data: null }, { data: pendingPayment }],
++    });
++
++    const result = await service.crearCheckout(user, CITA_ID);
++    const fields = result.checkout.fields;
++    const base = [
++      'test-api-key',
++      '508029',
++      pendingPayment.referencia,
++      '40000.00',
++      'COP',
++    ].join('~');
++
++    expect(result.pago.monto).toBe('40000.00');
++    expect(fields.signature).toBe(
++      createHmac('sha256', 'test-api-key').update(base).digest('hex'),
++    );
++    expect(fields).toMatchObject({
++      merchantId: '508029',
++      accountId: '512321',
++      amount: '40000.00',
++      currency: 'COP',
++      tax: '0',
++      taxReturnBase: '0',
++      test: '1',
++      buyerEmail: user.email,
++    });
++    expect(result.checkout).toMatchObject({
++      action: 'https://sandbox.checkout.payulatam.com/ppp-web-gateway-payu/',
++      method: 'POST',
++    });
++    expect(calls).toContainEqual({
++      table: 'pago',
++      method: 'insert',
++      args: [
++        expect.objectContaining({
++          id_cita: CITA_ID,
++          proveedor: 'payu',
++          monto: '40000.00',
++          moneda: 'COP',
++          estado: 'pendiente',
++        }),
++      ],
++    });
++  });
++
++  it('rechaza ids de cita inválidos antes de consultar Supabase', async () => {
++    const calls = fakeAdmin({});
++
++    await expect(
++      service.crearCheckout(user, 'no-es-uuid'),
++    ).rejects.toBeInstanceOf(BadRequestException);
++    expect(calls).toHaveLength(0);
++  });
++
++  it('no revela citas de otros clientes ni intenta crear pagos', async () => {
++    const calls = fakeAdmin({
++      cita: { data: { ...cita, id_cliente: USER_ID } },
++    });
++
++    await expect(service.crearCheckout(user, CITA_ID)).rejects.toBeInstanceOf(
++      NotFoundException,
++    );
++    expect(calls.some((call) => call.table === 'pago')).toBe(false);
++  });
++
++  it('solo permite pagar citas confirmadas', async () => {
++    const calls = fakeAdmin({
++      cita: { data: { ...cita, estado: 'pendiente' } },
++    });
++
++    await expect(service.crearCheckout(user, CITA_ID)).rejects.toBeInstanceOf(
++      ConflictException,
++    );
++    expect(calls.some((call) => call.table === 'pago')).toBe(false);
++  });
++
++  it('no crea un segundo pago cuando ya existe uno aprobado', async () => {
++    const calls = fakeAdmin({
++      cita: { data: cita },
++      pago: { data: { ...pendingPayment, estado: 'aprobado' } },
++    });
++
++    await expect(service.crearCheckout(user, CITA_ID)).rejects.toBeInstanceOf(
++      ConflictException,
++    );
++    expect(calls.some((call) => call.method === 'insert')).toBe(false);
++  });
++
++  it('reutiliza la referencia de un pago pendiente sin insertar otro', async () => {
++    const calls = fakeAdmin({
++      cita: { data: cita },
++      pago: { data: pendingPayment },
++    });
++
++    const result = await service.crearCheckout(user, CITA_ID);
++
++    expect(result.pago.referencia).toBe(pendingPayment.referencia);
++    expect(calls.some((call) => call.method === 'insert')).toBe(false);
++  });
++
++  it('resuelve dos solicitudes simultáneas reutilizando el pago ganador', async () => {
++    const calls = fakeAdmin({
++      cita: { data: cita },
++      pago: [
++        { data: null },
++        { data: null, error: { code: '23505', message: 'unique violation' } },
++        { data: pendingPayment },
++      ],
++    });
++
++    const result = await service.crearCheckout(user, CITA_ID);
++
++    expect(result.pago.referencia).toBe(pendingPayment.referencia);
++    expect(calls.filter((call) => call.method === 'insert')).toHaveLength(1);
++  });
++
++  it('no reutiliza un pago pendiente si el valor aplicado a la cita cambió', async () => {
++    const calls = fakeAdmin({
++      cita: { data: cita },
++      pago: { data: { ...pendingPayment, monto: '39999.00' } },
++    });
++
++    await expect(service.crearCheckout(user, CITA_ID)).rejects.toBeInstanceOf(
++      ConflictException,
++    );
++    expect(calls.some((call) => call.method === 'insert')).toBe(false);
++  });
++
++  it('rechaza citas sin procedimientos o con precios inválidos', async () => {
++    fakeAdmin({ cita: { data: { ...cita, cita_procedimiento: [] } } });
++    await expect(service.crearCheckout(user, CITA_ID)).rejects.toBeInstanceOf(
++      BadRequestException,
++    );
++
++    jest.restoreAllMocks();
++    fakeAdmin({
++      cita: {
++        data: {
++          ...cita,
++          cita_procedimiento: [{ precio_aplicado: Number.NaN }],
++        },
++      },
++    });
++    await expect(service.crearCheckout(user, CITA_ID)).rejects.toBeInstanceOf(
++      BadRequestException,
++    );
++  });
++});
+diff --git a/backend/src/pagos/pagos.service.ts b/backend/src/pagos/pagos.service.ts
+new file mode 100644
+index 0000000..c74cc4f
+--- /dev/null
++++ b/backend/src/pagos/pagos.service.ts
+@@ -0,0 +1,282 @@
++import {
++  BadRequestException,
++  ConflictException,
++  Injectable,
++  InternalServerErrorException,
++  NotFoundException,
++} from '@nestjs/common';
++import { createHmac, randomUUID } from 'node:crypto';
++import { isUuid } from '../admin/admin.utils';
++import type { AuthUser } from '../common/auth/auth-user';
++import { supabaseAdmin } from '../supabase';
++
++type EstadoPago =
++  | 'pendiente'
++  | 'aprobado'
++  | 'rechazado'
++  | 'expirado'
++  | 'error'
++  | 'anulado';
++
++interface CitaPagoRow {
++  id_cita: string;
++  id_cliente: string;
++  estado: string;
++  cita_procedimiento?: { precio_aplicado: string | number }[];
++}
++
++interface PagoRow {
++  id_pago: string;
++  id_cita: string;
++  referencia: string;
++  monto: string | number;
++  moneda: string;
++  estado: EstadoPago;
++}
++
++interface PayUConfig {
++  merchantId: string;
++  accountId: string;
++  apiKey: string;
++  checkoutUrl: string;
++  confirmationUrl: string;
++  responseUrl: string;
++}
++
++const PAYMENT_FIELDS = 'id_pago, id_cita, referencia, monto, moneda, estado';
++const SANDBOX_CHECKOUT_URL =
++  'https://sandbox.checkout.payulatam.com/ppp-web-gateway-payu/';
++
++@Injectable()
++export class PagosService {
++  async crearCheckout(user: AuthUser, idCita: string) {
++    if (!isUuid(idCita)) {
++      throw new BadRequestException('El id de la cita no es válido');
++    }
++
++    if (user.role !== 'cliente') {
++      throw new NotFoundException('No se encontró la cita');
++    }
++
++    const config = this.getConfig();
++    const { data: rawCita, error: errorCita } = await supabaseAdmin
++      .from('cita')
++      .select(
++        'id_cita, id_cliente, estado, cita_procedimiento(precio_aplicado)',
++      )
++      .eq('id_cita', idCita)
++      .maybeSingle();
++
++    if (errorCita) {
++      throw new InternalServerErrorException(errorCita.message);
++    }
++
++    const cita = rawCita as unknown as CitaPagoRow | null;
++    if (!cita || cita.id_cliente !== user.profileId) {
++      throw new NotFoundException('No se encontró la cita');
++    }
++    if (cita.estado !== 'confirmada') {
++      throw new ConflictException(
++        'Solo se pueden pagar citas confirmadas por el barbero',
++      );
++    }
++
++    const monto = this.calcularMonto(cita.cita_procedimiento ?? []);
++    const { data: pagoActivoRaw, error: errorPagoActivo } = await supabaseAdmin
++      .from('pago')
++      .select(PAYMENT_FIELDS)
++      .eq('id_cita', idCita)
++      .in('estado', ['pendiente', 'aprobado'])
++      .maybeSingle();
++
++    if (errorPagoActivo) {
++      throw new InternalServerErrorException(errorPagoActivo.message);
++    }
++
++    const pagoActivo = pagoActivoRaw as unknown as PagoRow | null;
++    if (pagoActivo?.estado === 'aprobado') {
++      throw new ConflictException('Esta cita ya tiene un pago aprobado');
++    }
++    if (pagoActivo?.estado === 'pendiente') {
++      if (Number(pagoActivo.monto).toFixed(2) !== monto) {
++        throw new ConflictException(
++          'El valor de la cita cambió; solicita una nueva confirmación',
++        );
++      }
++      return this.toCheckout(pagoActivo, user, config);
++    }
++
++    const referencia = `ET-${idCita}-${randomUUID()}`;
++    const { data: pagoCreadoRaw, error: errorInsert } = await supabaseAdmin
++      .from('pago')
++      .insert({
++        id_cita: idCita,
++        proveedor: 'payu',
++        referencia,
++        monto,
++        moneda: 'COP',
++        estado: 'pendiente',
++      })
++      .select(PAYMENT_FIELDS)
++      .single();
++
++    if (errorInsert) {
++      // El índice parcial en la base arbitra solicitudes simultáneas. Si otra
++      // petición creó el pago primero, se devuelve ese mismo formulario.
++      if (errorInsert.code === '23505') {
++        return this.leerPagoConcurrente(idCita, user, config);
++      }
++      throw new InternalServerErrorException(errorInsert.message);
++    }
++
++    if (!pagoCreadoRaw) {
++      throw new InternalServerErrorException('No se pudo crear el pago');
++    }
++
++    return this.toCheckout(pagoCreadoRaw as unknown as PagoRow, user, config);
++  }
++
++  private calcularMonto(items: { precio_aplicado: string | number }[]) {
++    if (items.length === 0) {
++      throw new BadRequestException('La cita no tiene procedimientos válidos');
++    }
++
++    const amount = items.reduce((total, item) => {
++      const price = Number(item.precio_aplicado);
++      if (!Number.isFinite(price) || price < 0) {
++        throw new BadRequestException('El precio de la cita no es válido');
++      }
++      return total + Math.round(price * 100);
++    }, 0);
++
++    if (amount <= 0) {
++      throw new BadRequestException(
++        'El total de la cita debe ser mayor a cero',
++      );
++    }
++
++    return (amount / 100).toFixed(2);
++  }
++
++  private async leerPagoConcurrente(
++    idCita: string,
++    user: AuthUser,
++    config: PayUConfig,
++  ) {
++    const { data, error } = await supabaseAdmin
++      .from('pago')
++      .select(PAYMENT_FIELDS)
++      .eq('id_cita', idCita)
++      .in('estado', ['pendiente', 'aprobado'])
++      .maybeSingle();
++
++    if (error) {
++      throw new InternalServerErrorException(error.message);
++    }
++
++    const pago = data as unknown as PagoRow | null;
++    if (pago?.estado === 'aprobado') {
++      throw new ConflictException('Esta cita ya tiene un pago aprobado');
++    }
++    if (pago?.estado === 'pendiente') {
++      const { data: rawCita, error: errorCita } = await supabaseAdmin
++        .from('cita')
++        .select('cita_procedimiento(precio_aplicado)')
++        .eq('id_cita', idCita)
++        .maybeSingle();
++      if (errorCita) {
++        throw new InternalServerErrorException(errorCita.message);
++      }
++      const cita = rawCita as unknown as {
++        cita_procedimiento?: { precio_aplicado: string | number }[];
++      } | null;
++      const montoActual = this.calcularMonto(cita?.cita_procedimiento ?? []);
++      if (Number(pago.monto).toFixed(2) !== montoActual) {
++        throw new ConflictException(
++          'El valor de la cita cambió; solicita una nueva confirmación',
++        );
++      }
++      return this.toCheckout(pago, user, config);
++    }
++
++    throw new ConflictException('Ya hay un intento de pago en proceso');
++  }
++
++  private toCheckout(pago: PagoRow, user: AuthUser, config: PayUConfig) {
++    const amount = Number(pago.monto).toFixed(2);
++    const base = [
++      config.apiKey,
++      config.merchantId,
++      pago.referencia,
++      amount,
++      pago.moneda,
++    ].join('~');
++    const signature = createHmac('sha256', config.apiKey)
++      .update(base, 'utf8')
++      .digest('hex');
++
++    return {
++      pago: {
++        id: pago.id_pago,
++        referencia: pago.referencia,
++        monto: amount,
++        moneda: pago.moneda,
++        estado: pago.estado,
++      },
++      checkout: {
++        action: config.checkoutUrl,
++        method: 'POST' as const,
++        fields: {
++          merchantId: config.merchantId,
++          accountId: config.accountId,
++          description: `Pago cita ${pago.id_cita}`,
++          referenceCode: pago.referencia,
++          amount,
++          tax: '0',
++          taxReturnBase: '0',
++          currency: pago.moneda,
++          algorithmSignature: 'HMAC-SHA256',
++          signature,
++          test: '1',
++          buyerEmail: user.email ?? '',
++          payerFullName: user.nombre,
++          confirmationUrl: config.confirmationUrl,
++          responseUrl: config.responseUrl,
++        },
++      },
++    };
++  }
++
++  private getConfig(): PayUConfig {
++    const config: PayUConfig = {
++      merchantId: process.env.PAYU_MERCHANT_ID ?? '',
++      accountId: process.env.PAYU_ACCOUNT_ID_CO ?? '',
++      apiKey: process.env.PAYU_API_KEY ?? '',
++      checkoutUrl: process.env.PAYU_CHECKOUT_URL || SANDBOX_CHECKOUT_URL,
++      confirmationUrl: process.env.PAYU_CONFIRMATION_URL ?? '',
++      responseUrl: process.env.PAYU_RESPONSE_URL ?? '',
++    };
++
++    if (
++      !config.merchantId ||
++      !config.accountId ||
++      !config.apiKey ||
++      !config.confirmationUrl ||
++      !config.responseUrl
++    ) {
++      throw new InternalServerErrorException(
++        'Falta configurar el checkout sandbox de PayU',
++      );
++    }
++
++    if (
++      !config.checkoutUrl.startsWith('https://sandbox.checkout.payulatam.com/')
++    ) {
++      throw new InternalServerErrorException(
++        'PAYU_CHECKOUT_URL debe apuntar al sandbox de PayU',
++      );
++    }
++
++    return config;
++  }
++}
+diff --git a/backend/supabase/migrations/20261106234719_pagos_payu.sql b/backend/supabase/migrations/20261106234719_pagos_payu.sql
+new file mode 100644
+index 0000000..e2c9c7f
+--- /dev/null
++++ b/backend/supabase/migrations/20261106234719_pagos_payu.sql
+@@ -0,0 +1,61 @@
++-- EdgeTimer - Entrega A: registro de pagos de citas con PayU.
++-- El backend escribe con service_role. authenticated solo puede consultar
++-- sus propios pagos y no recibe acceso a la respuesta cruda del proveedor.
++
++BEGIN;
++
++CREATE TABLE public.pago (
++  id_pago UUID PRIMARY KEY DEFAULT gen_random_uuid(),
++  id_cita UUID NOT NULL REFERENCES public.cita(id_cita) ON DELETE RESTRICT,
++  proveedor TEXT NOT NULL DEFAULT 'payu' CHECK (proveedor = 'payu'),
++  referencia TEXT NOT NULL UNIQUE,
++  monto NUMERIC(12, 2) NOT NULL CHECK (monto > 0),
++  moneda CHAR(3) NOT NULL DEFAULT 'COP' CHECK (moneda = 'COP'),
++  estado TEXT NOT NULL DEFAULT 'pendiente'
++    CHECK (estado IN ('pendiente', 'aprobado', 'rechazado', 'expirado', 'error', 'anulado')),
++  id_transaccion_proveedor TEXT,
++  respuesta_proveedor JSONB,
++  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
++  aprobado_at TIMESTAMPTZ
++);
++
++CREATE INDEX pago_id_cita_creado_idx
++  ON public.pago (id_cita, created_at DESC);
++
++-- Un pago pendiente reserva el intento; uno aprobado bloquea todo nuevo cobro.
++CREATE UNIQUE INDEX pago_una_reserva_activa_por_cita_idx
++  ON public.pago (id_cita)
++  WHERE estado IN ('pendiente', 'aprobado');
++
++ALTER TABLE public.pago ENABLE ROW LEVEL SECURITY;
++
++CREATE POLICY pago_select_cliente_propio
++  ON public.pago
++  FOR SELECT
++  TO authenticated
++  USING (
++    EXISTS (
++      SELECT 1
++      FROM public.cita AS ci
++      WHERE ci.id_cita = pago.id_cita
++        AND private.es_cliente_propio(ci.id_cliente)
++    )
++  );
++
++REVOKE ALL PRIVILEGES ON TABLE public.pago FROM PUBLIC, anon, authenticated;
++GRANT SELECT (
++  id_pago,
++  id_cita,
++  proveedor,
++  referencia,
++  monto,
++  moneda,
++  estado,
++  created_at,
++  updated_at,
++  aprobado_at
++) ON public.pago TO authenticated;
++GRANT ALL PRIVILEGES ON TABLE public.pago TO service_role;
++
++COMMIT;
+-- 
+2.53.0.windows.2
+
