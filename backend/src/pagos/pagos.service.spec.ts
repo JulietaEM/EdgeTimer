@@ -158,14 +158,6 @@ describe('PagosService', () => {
     expect((service as any).mapEstado('7')).toBe('pendiente');
   });
 
-  it('acepta las representaciones documentadas de una notificación sandbox', () => {
-    expect((service as any).isSandboxFlag('1')).toBe(true);
-    expect((service as any).isSandboxFlag('true')).toBe(true);
-    expect((service as any).isSandboxFlag('TRUE')).toBe(true);
-    expect((service as any).isSandboxFlag('0')).toBe(false);
-    expect((service as any).isSandboxFlag('false')).toBe(false);
-  });
-
   it('no revela citas de otros clientes ni intenta crear pagos', async () => {
     const calls = fakeAdmin({
       cita: { data: { ...cita, id_cliente: USER_ID } },

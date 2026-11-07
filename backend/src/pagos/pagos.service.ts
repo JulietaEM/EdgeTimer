@@ -129,11 +129,6 @@ export class PagosService {
         'El comercio de la notificación no coincide con PayU',
       );
     }
-    if (!this.isSandboxFlag(payload.test)) {
-      throw new BadRequestException(
-        'La notificación no está marcada como sandbox',
-      );
-    }
     if (!this.validarFirma(payload, config.apiKey)) {
       throw new BadRequestException('Firma de notificación inválida');
     }
@@ -167,6 +162,8 @@ export class PagosService {
       orden.referenceCode !== pago.referencia ||
       String(orden.merchantId) !== config.merchantId ||
       String(orden.accountId) !== config.accountId ||
+      // La API sandbox de PayU confirma el modo de la orden; el campo `test`
+      // de la notificación puede llegar con una representación distinta.
       orden.isTest !== true ||
       !tx ||
       !txValue ||
@@ -250,13 +247,6 @@ export class PagosService {
     const supplied = Buffer.from(p.sign!, 'hex');
     return (
       expected.length === supplied.length && timingSafeEqual(expected, supplied)
-    );
-  }
-
-  private isSandboxFlag(value: unknown) {
-    return (
-      typeof value === 'string' &&
-      ['1', 'true'].includes(value.trim().toLowerCase())
     );
   }
 
