@@ -59,6 +59,19 @@ $ npm run test:cov
 
 ## Deployment
 
+### PayU Latam (sandbox)
+
+La Entrega A registra un intento de pago pendiente y prepara los campos del
+formulario WebCheckout. El backend calcula el valor desde los precios aplicados
+a la cita; el cliente no envía el monto. Configura las variables de
+`backend/.env.example` en `backend/.env` y en Render. El endpoint autenticado es
+`POST /pagos/citas/:idCita/checkout` y solo admite citas confirmadas del cliente.
+
+El endpoint siempre debe apuntar al sandbox mientras el flujo de pagos esté en
+pruebas. Las credenciales públicas compartidas por PayU son solo para sandbox;
+no habilitan cobros reales. La confirmación de PayU y la consulta servidor a
+servidor se implementan en la siguiente entrega.
+
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
 
 If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
@@ -96,3 +109,7 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+# PayU Latam (sandbox)
+
+El backend expone `POST /pagos/confirmacion` para la notificación de PayU. Configura esa URL pública en el panel sandbox y conserva `PAYU_API_LOGIN`, `PAYU_API_KEY` y los demás valores PayU solo en el entorno del servidor. La notificación se valida por firma y se contrasta con la API de consultas sandbox antes de guardar su estado. El cliente autenticado puede consultar `GET /pagos/citas/:idCita` para leer el estado seguro del pago.
+
