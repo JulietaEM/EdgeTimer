@@ -97,3 +97,7 @@ specs/
 # Root logs
 *.err.log
 *.out.log
+
+#Patches
+*.patch
+.codex-*
