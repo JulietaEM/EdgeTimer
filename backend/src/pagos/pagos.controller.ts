@@ -68,9 +68,10 @@ export class PagosController {
   private badRequestCategory(message: string) {
     if (message === 'Notificación PayU incompleta')
       return 'callback_incomplete';
-    if (message === 'Notificación fuera del comercio o sandbox configurado') {
-      return 'merchant_or_test_mismatch';
-    }
+    if (message === 'El comercio de la notificación no coincide con PayU')
+      return 'merchant_mismatch';
+    if (message === 'La notificación no está marcada como sandbox')
+      return 'sandbox_flag_mismatch';
     if (message === 'Firma de notificación inválida')
       return 'invalid_signature';
     if (message === 'Monto o moneda no coincide con el pago') {

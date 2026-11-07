@@ -124,9 +124,14 @@ export class PagosService {
     ) {
       throw new BadRequestException('Notificación PayU incompleta');
     }
-    if (payload.merchant_id !== config.merchantId || payload.test !== '1') {
+    if (payload.merchant_id !== config.merchantId) {
       throw new BadRequestException(
-        'Notificación fuera del comercio o sandbox configurado',
+        'El comercio de la notificación no coincide con PayU',
+      );
+    }
+    if (!this.isSandboxFlag(payload.test)) {
+      throw new BadRequestException(
+        'La notificación no está marcada como sandbox',
       );
     }
     if (!this.validarFirma(payload, config.apiKey)) {
@@ -245,6 +250,13 @@ export class PagosService {
     const supplied = Buffer.from(p.sign!, 'hex');
     return (
       expected.length === supplied.length && timingSafeEqual(expected, supplied)
+    );
+  }
+
+  private isSandboxFlag(value: unknown) {
+    return (
+      typeof value === 'string' &&
+      ['1', 'true'].includes(value.trim().toLowerCase())
     );
   }
 
