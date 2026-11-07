@@ -489,9 +489,7 @@ export class PagosService {
       amount,
       pago.moneda,
     ].join('~');
-    const signature = createHmac('sha256', config.apiKey)
-      .update(base, 'utf8')
-      .digest('hex');
+    const signature = createHash('sha256').update(base, 'utf8').digest('hex');
 
     return {
       pago: {
@@ -513,7 +511,7 @@ export class PagosService {
           tax: '0',
           taxReturnBase: '0',
           currency: pago.moneda,
-          algorithmSignature: 'HMAC-SHA256',
+          algorithmSignature: 'SHA256',
           signature,
           test: '1',
           buyerEmail: user.email ?? '',

@@ -3,7 +3,7 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 process.env.SUPABASE_URL = 'http://localhost:54321';
 process.env.SUPABASE_KEY = 'anon-key';
@@ -65,7 +65,7 @@ describe('PagosService', () => {
     jest.restoreAllMocks();
   });
 
-  it('calcula el total con precios aplicados y devuelve formulario HMAC de sandbox', async () => {
+  it('calcula el total con precios aplicados y devuelve formulario SHA256 de sandbox', async () => {
     const calls = fakeAdmin({
       cita: { data: cita },
       pago: [{ data: null }, { data: pendingPayment }],
@@ -83,13 +83,14 @@ describe('PagosService', () => {
 
     expect(result.pago.monto).toBe('40000.00');
     expect(fields.signature).toBe(
-      createHmac('sha256', 'test-api-key').update(base).digest('hex'),
+      createHash('sha256').update(base).digest('hex'),
     );
     expect(fields).toMatchObject({
       merchantId: '508029',
       accountId: '512321',
       amount: '40000.00',
       currency: 'COP',
+      algorithmSignature: 'SHA256',
       tax: '0',
       taxReturnBase: '0',
       test: '1',
