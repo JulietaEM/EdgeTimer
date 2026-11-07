@@ -166,13 +166,13 @@ export class PagosService {
     const txValue =
       tx?.additionalValues?.TX_VALUE ?? orden.additionalValues?.TX_VALUE;
     const queryState = tx?.transactionResponse?.state;
+    // getConfig locks this request to PayU's sandbox Query API. The Query API's
+    // isTest flag is not reliable for sandbox orders, so validate the returned
+    // merchant/account/order/transaction details instead.
     const queryChecks = {
       reference: orden.referenceCode === pago.referencia,
       merchant: String(orden.merchantId) === config.merchantId,
       account: String(orden.accountId) === config.accountId,
-      // La API sandbox de PayU confirma el modo de la orden; el campo `test`
-      // de la notificación puede llegar con una representación distinta.
-      sandboxOrder: orden.isTest === true,
       transaction: !!tx,
       transactionValue: !!txValue,
       currency: !!txValue && txValue.currency === pago.moneda,
