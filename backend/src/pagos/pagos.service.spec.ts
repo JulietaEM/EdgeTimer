@@ -151,6 +151,31 @@ describe('PagosService', () => {
     expect((service as any).validarFirma(payload, 'test-api-key')).toBe(false);
   });
 
+  it('identifica el algoritmo coincidente sin exponer la firma', () => {
+    const payload = {
+      merchant_id: '508029',
+      reference_sale: 'ET-test',
+      value: '40000.00',
+      currency: 'COP',
+      state_pol: '4',
+      sign: '',
+      transaction_id: 'tx-1',
+      test: '1',
+    };
+    const source = [
+      'test-api-key',
+      payload.merchant_id,
+      payload.reference_sale,
+      '40000.0',
+      payload.currency,
+      payload.state_pol,
+    ].join('~');
+    payload.sign = createHash('md5').update(source).digest('hex');
+    expect(
+      (service as any).algoritmosFirmaCoincidentes(payload, 'test-api-key'),
+    ).toEqual(['MD5']);
+  });
+
   it('mapea los estados de PayU sin tratar pendientes como aprobados', () => {
     expect((service as any).mapEstado('4')).toBe('aprobado');
     expect((service as any).mapEstado('6')).toBe('rechazado');

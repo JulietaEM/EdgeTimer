@@ -4,6 +4,7 @@ import {
   HttpException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -71,6 +72,8 @@ interface ConfirmacionPayU {
 
 @Injectable()
 export class PagosService {
+  private readonly logger = new Logger(PagosService.name);
+
   async estadoCita(user: AuthUser, idCita: string) {
     if (!isUuid(idCita) || user.role !== 'cliente') {
       throw new NotFoundException('No se encontró la cita');
@@ -130,6 +133,11 @@ export class PagosService {
       );
     }
     if (!this.validarFirma(payload, config.apiKey)) {
+      const matches = this.algoritmosFirmaCoincidentes(payload, config.apiKey);
+      const configured = process.env.PAYU_SIGNATURE_ALGORITHM || 'HMAC-SHA256';
+      this.logger.warn(
+        `PayU signature mismatch: configured=${configured}; matching_algorithms=${matches.join(',') || 'none'}`,
+      );
       throw new BadRequestException('Firma de notificación inválida');
     }
     const { data: raw, error } = await supabaseAdmin
@@ -248,6 +256,52 @@ export class PagosService {
     return (
       expected.length === supplied.length && timingSafeEqual(expected, supplied)
     );
+  }
+
+  /** Logs only matching algorithm names; never logs the payload or signatures. */
+  private algoritmosFirmaCoincidentes(p: ConfirmacionPayU, apiKey: string) {
+    const rawValue = Number(p.value);
+    if (!Number.isFinite(rawValue) || !/^[a-f\d]+$/i.test(p.sign ?? '')) {
+      return [];
+    }
+    const rounded = rawValue.toFixed(
+      rawValue % 1 === 0 || Math.round(rawValue * 100) % 10 === 0 ? 1 : 2,
+    );
+    const source = [
+      apiKey,
+      p.merchant_id,
+      p.reference_sale,
+      rounded,
+      p.currency,
+      p.state_pol,
+    ].join('~');
+    const candidates: [string, string][] = [
+      ['MD5', createHash('md5').update(source).digest('hex')],
+      ['SHA1', createHash('sha1').update(source).digest('hex')],
+      ['SHA256', createHash('sha256').update(source).digest('hex')],
+      [
+        'HMAC-SHA256_API_KEY',
+        createHmac('sha256', apiKey).update(source).digest('hex'),
+      ],
+    ];
+    const customKey = process.env.PAYU_SIGNATURE_HMAC_KEY;
+    if (customKey && customKey !== apiKey) {
+      candidates.push([
+        'HMAC-SHA256_CUSTOM_KEY',
+        createHmac('sha256', customKey).update(source).digest('hex'),
+      ]);
+    }
+
+    const supplied = Buffer.from(p.sign, 'hex');
+    return candidates
+      .filter(([, hash]) => {
+        const expected = Buffer.from(hash, 'hex');
+        return (
+          expected.length === supplied.length &&
+          timingSafeEqual(expected, supplied)
+        );
+      })
+      .map(([name]) => name);
   }
 
   private toMinorUnits(value: string) {
