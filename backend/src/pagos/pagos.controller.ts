@@ -70,8 +70,6 @@ export class PagosController {
       return 'callback_incomplete';
     if (message === 'El comercio de la notificación no coincide con PayU')
       return 'merchant_mismatch';
-    if (message === 'La notificación no está marcada como sandbox')
-      return 'sandbox_flag_mismatch';
     if (message === 'Firma de notificación inválida')
       return 'invalid_signature';
     if (message === 'Monto o moneda no coincide con el pago') {
