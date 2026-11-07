@@ -261,7 +261,8 @@ export class PagosService {
   /** Logs only matching algorithm names; never logs the payload or signatures. */
   private algoritmosFirmaCoincidentes(p: ConfirmacionPayU, apiKey: string) {
     const rawValue = Number(p.value);
-    if (!Number.isFinite(rawValue) || !/^[a-f\d]+$/i.test(p.sign ?? '')) {
+    const sign = p.sign;
+    if (!Number.isFinite(rawValue) || !sign || !/^[a-f\d]+$/i.test(sign)) {
       return [];
     }
     const rounded = rawValue.toFixed(
@@ -292,7 +293,7 @@ export class PagosService {
       ]);
     }
 
-    const supplied = Buffer.from(p.sign, 'hex');
+    const supplied = Buffer.from(sign, 'hex');
     return candidates
       .filter(([, hash]) => {
         const expected = Buffer.from(hash, 'hex');
