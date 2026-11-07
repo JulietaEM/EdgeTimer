@@ -8,6 +8,7 @@ import { AuthModule } from './auth/auth.module';
 import { BarberoModule } from './barbero/barbero.module';
 import { ClienteModule } from './cliente/cliente.module';
 import { NotificacionesModule } from './notificaciones/notificaciones.module';
+import { PagosModule } from './pagos/pagos.module';
 import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
 import { RolesGuard } from './common/auth/roles.guard';
 
@@ -19,6 +20,7 @@ import { RolesGuard } from './common/auth/roles.guard';
     BarberoModule,
     ClienteModule,
     NotificacionesModule,
+    PagosModule,
   ],
   controllers: [AppController],
   providers: [
