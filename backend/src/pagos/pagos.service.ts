@@ -166,23 +166,33 @@ export class PagosService {
     const txValue =
       tx?.additionalValues?.TX_VALUE ?? orden.additionalValues?.TX_VALUE;
     const queryState = tx?.transactionResponse?.state;
-    if (
-      orden.referenceCode !== pago.referencia ||
-      String(orden.merchantId) !== config.merchantId ||
-      String(orden.accountId) !== config.accountId ||
+    const queryChecks = {
+      reference: orden.referenceCode === pago.referencia,
+      merchant: String(orden.merchantId) === config.merchantId,
+      account: String(orden.accountId) === config.accountId,
       // La API sandbox de PayU confirma el modo de la orden; el campo `test`
       // de la notificación puede llegar con una representación distinta.
-      orden.isTest !== true ||
-      !tx ||
-      !txValue ||
-      txValue.currency !== pago.moneda ||
-      this.toMinorUnits(String(txValue.value)) !==
-        this.toMinorUnits(String(pago.monto)) ||
-      queryState !== this.estadoProveedor(payload.state_pol!)
-    )
+      sandboxOrder: orden.isTest === true,
+      transaction: !!tx,
+      transactionValue: !!txValue,
+      currency: !!txValue && txValue.currency === pago.moneda,
+      amount:
+        !!txValue &&
+        this.toMinorUnits(String(txValue.value)) ===
+          this.toMinorUnits(String(pago.monto)),
+      state: queryState === this.estadoProveedor(payload.state_pol!),
+    };
+    const failedChecks = Object.entries(queryChecks)
+      .filter(([, matched]) => !matched)
+      .map(([name]) => name);
+    if (failedChecks.length > 0) {
+      this.logger.warn(
+        `PayU query mismatch: failed_checks=${failedChecks.join(',')}`,
+      );
       throw new BadRequestException(
         'La consulta de PayU no coincide con la notificación',
       );
+    }
     if (payload.state_pol === '4' && orden.status !== 'CAPTURED') {
       throw new BadRequestException('PayU no reporta la orden como capturada');
     }
