@@ -45,7 +45,7 @@ export class PagosController {
     } catch (error) {
       const category =
         error instanceof BadRequestException
-          ? 'signature_or_provider_data_mismatch'
+          ? this.badRequestCategory(error.message)
           : error instanceof NotFoundException
             ? 'payment_reference_not_found'
             : error instanceof ConflictException
@@ -63,5 +63,27 @@ export class PagosController {
   @Get('citas/:idCita')
   estadoCita(@CurrentUser() user: AuthUser, @Param('idCita') idCita: string) {
     return this.pagosService.estadoCita(user, idCita);
+  }
+
+  private badRequestCategory(message: string) {
+    if (message === 'Notificación PayU incompleta')
+      return 'callback_incomplete';
+    if (message === 'Notificación fuera del comercio o sandbox configurado') {
+      return 'merchant_or_test_mismatch';
+    }
+    if (message === 'Firma de notificación inválida')
+      return 'invalid_signature';
+    if (message === 'Monto o moneda no coincide con el pago') {
+      return 'amount_or_currency_mismatch';
+    }
+    if (message === 'La consulta de PayU no coincide con la notificación') {
+      return 'query_data_mismatch';
+    }
+    if (message === 'PayU no reporta la orden como capturada') {
+      return 'provider_order_not_captured';
+    }
+    if (message === 'PayU no encontró la orden')
+      return 'provider_order_not_found';
+    return 'invalid_provider_data';
   }
 }
