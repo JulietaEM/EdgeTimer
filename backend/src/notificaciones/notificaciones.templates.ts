@@ -133,6 +133,14 @@ export function avisosDeEvento(
         mensaje: `${quien} no aceptó el cambio de horario. La cita sigue el ${cuando}.`,
       });
       break;
+
+    case 'pago_aprobado':
+      avisos.push({
+        userId: barbero.userId,
+        titulo: 'Pago aprobado',
+        mensaje: `${cliente.nombre} pagó la cita del ${cuando}.`,
+      });
+      break;
   }
 
   // Sin cuenta vinculada no hay a quién avisar.

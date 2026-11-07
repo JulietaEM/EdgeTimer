@@ -58,7 +58,7 @@ describe('PagosService', () => {
   let service: PagosService;
 
   beforeEach(() => {
-    service = new PagosService();
+    service = new PagosService({ citaEvento: jest.fn() } as never);
   });
 
   afterEach(() => {

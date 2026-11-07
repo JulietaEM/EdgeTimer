@@ -15,6 +15,7 @@ import {
 } from 'node:crypto';
 import { isUuid } from '../admin/admin.utils';
 import type { AuthUser } from '../common/auth/auth-user';
+import { NotificacionesService } from '../notificaciones/notificaciones.service';
 import { supabaseAdmin } from '../supabase';
 
 type EstadoPago =
@@ -73,6 +74,8 @@ interface ConfirmacionPayU {
 @Injectable()
 export class PagosService {
   private readonly logger = new Logger(PagosService.name);
+
+  constructor(private readonly notificaciones: NotificacionesService) {}
 
   async estadoCita(user: AuthUser, idCita: string) {
     if (!isUuid(idCita) || user.role !== 'cliente') {
@@ -224,6 +227,13 @@ export class PagosService {
         .maybeSingle();
       if ((latest as { estado?: string } | null)?.estado !== 'aprobado')
         throw new ConflictException('No se pudo actualizar el pago');
+    }
+    if (updated && estado === 'aprobado') {
+      await this.notificaciones.citaEvento(
+        pago.id_cita,
+        'pago_aprobado',
+        'cliente',
+      );
     }
     return { recibido: true };
   }
