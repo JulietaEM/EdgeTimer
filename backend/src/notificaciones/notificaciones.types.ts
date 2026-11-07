@@ -8,7 +8,8 @@ export type EventoCita =
   | 'cancelada'
   | 'propuesta'
   | 'reprogramada'
-  | 'propuesta_rechazada';
+  | 'propuesta_rechazada'
+  | 'pago_aprobado';
 
 export type { Actor };
 
